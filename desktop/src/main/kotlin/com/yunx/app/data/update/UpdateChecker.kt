@@ -8,12 +8,12 @@ import org.json.JSONObject
 
 /**
  * GitHub Release 更新检测。
- * 真实实现：GET https://api.github.com/repos/CYQawa/YunX/releases/latest
+ * 真实实现：GET https://api.github.com/repos/tidain/YunX-Desktop/releases/latest
  */
 object UpdateChecker {
 
     private const val RELEASES_LATEST_URL =
-        "https://api.github.com/repos/CYQawa/YunX/releases/latest"
+        "https://api.github.com/repos/tidain/YunX-Desktop/releases/latest"
 
     /** GitHub 下载加速镜像站前缀（国内直连 GitHub 慢/失败时的兜底下载通道） */
     const val MIRROR_PREFIX = "https://cdn.gh-proxy.org/"
@@ -47,7 +47,7 @@ object UpdateChecker {
     }
 
     /** 当前应用版本号（桌面版固定常量，发布时随 packageVersion 同步更新） */
-    const val PC_VERSION = "1.2.0"
+    const val PC_VERSION = "1.2.1"
 
     fun currentVersion(): String = PC_VERSION
 

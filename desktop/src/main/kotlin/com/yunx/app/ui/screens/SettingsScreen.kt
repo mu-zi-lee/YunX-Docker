@@ -481,25 +481,15 @@ fun SettingsScreen(
         UpdateDialog(
             currentVersion = UpdateChecker.currentVersion(),
             release = release,
-            onDownload = {
+            onDownloadAsset = { url, name ->
                 updateRelease = null
-                val apk = release.assets.firstOrNull { it.name.endsWith(".apk", true) }
-                if (apk != null) {
-                    onDownloadUpdateApk(apk.downloadUrl, apk.name)
-                    SnackbarController.show("已加入下载 ${apk.name}")
-                } else {
-                    SnackbarController.show("未找到 APK 下载链接")
-                }
+                onDownloadUpdateApk(url, name)
+                SnackbarController.show("已加入下载 $name")
             },
-            onDownloadMirror = {
+            onDownloadMirrorAsset = { url, name ->
                 updateRelease = null
-                val apk = release.assets.firstOrNull { it.name.endsWith(".apk", true) }
-                if (apk != null) {
-                    onDownloadUpdateApk(UpdateChecker.mirrorUrl(apk.downloadUrl), apk.name)
-                    SnackbarController.show("已通过镜像站加入下载 ${apk.name}")
-                } else {
-                    SnackbarController.show("未找到 APK 下载链接")
-                }
+                onDownloadUpdateApk(UpdateChecker.mirrorUrl(url), name)
+                SnackbarController.show("已通过镜像站加入下载 $name")
             },
             onLater = { updateRelease = null },
             onIgnore = {

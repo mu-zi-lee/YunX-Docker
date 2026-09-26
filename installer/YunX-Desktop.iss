@@ -15,6 +15,14 @@ AppId={{7C1E5F9A-3B2D-4E68-9C4F-A1D2B3C4E5F6}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppNameEn}
+AppPublisherURL=https://github.com/tidain/YunX-Desktop
+AppSupportURL=https://github.com/tidain/YunX-Desktop/issues
+AppUpdatesURL=https://github.com/tidain/YunX-Desktop/releases
+; 安装程序自身的文件版本信息（资源管理器 → setup.exe 属性 → 详细信息）
+VersionInfoVersion={#AppVersion}
+VersionInfoProductName={#AppName}
+VersionInfoCompany={#AppNameEn}
+VersionInfoDescription={#AppName} - 网盘分享链接解析与高速下载器
 ; lowest = no UAC prompt; {autopf} then maps to %LOCALAPPDATA%\Programs (ASCII-safe path
 ; for the bundled launcher). Remove PrivilegesRequired line to install per-machine instead.
 PrivilegesRequired=lowest

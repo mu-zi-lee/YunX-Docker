@@ -1,8 +1,7 @@
 package com.yunx.app.ui.clipboard
 
-import androidx.compose.runtime.getValue
+import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 
 /**
  * 托盘右键菜单控制器：桥接 AWT 鼠标事件线程与 Compose UI 线程。
@@ -13,24 +12,25 @@ import androidx.compose.runtime.setValue
  */
 object TrayMenuController {
 
-    /** 非 null 时表示需要在 (x, y) 屏幕坐标显示托盘菜单 */
-    var showRequest: Pair<Int, Int>? by mutableStateOf(null)
-        private set
+    private val _showRequest = mutableStateOf<Pair<Int, Int>?>(null)
+
+    /** 可观察的显示请求状态（非 null 时表示需要在 (x, y) 屏幕坐标显示托盘菜单） */
+    val showRequestState: State<Pair<Int, Int>?> = _showRequest
 
     /** 请求在指定屏幕坐标显示托盘菜单（由 TrayManager 右键回调调用） */
     fun requestShow(x: Int, y: Int) {
-        showRequest = x to y
+        _showRequest.value = x to y
     }
 
     /** 消费显示请求（返回坐标并清空），由 TrayMenuPopup 调用 */
     fun consume(): Pair<Int, Int>? {
-        val req = showRequest
-        showRequest = null
+        val req = _showRequest.value
+        _showRequest.value = null
         return req
     }
 
     /** 手动关闭菜单 */
     fun dismiss() {
-        showRequest = null
+        _showRequest.value = null
     }
 }

@@ -48,8 +48,9 @@ object TrayManager {
         val icon = TrayIcon(image.getScaledInstance(16, 16, Image.SCALE_SMOOTH), "云析 YunX-Desktop").apply {
             isImageAutoSize = true
             // 捕获鼠标事件：左键显示主窗口，右键弹出 Compose 菜单
+            // 使用 mousePressed 而非 mouseClicked：TrayIcon 在 Windows 上 mouseClicked 对右键不可靠
             addMouseListener(object : MouseAdapter() {
-                override fun mouseClicked(e: MouseEvent) {
+                override fun mousePressed(e: MouseEvent) {
                     if (e.button == MouseEvent.BUTTON1) {
                         onLeftClick()
                     } else if (e.button == MouseEvent.BUTTON3) {

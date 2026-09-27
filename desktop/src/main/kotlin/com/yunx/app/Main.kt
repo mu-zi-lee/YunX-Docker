@@ -3,12 +3,14 @@ package com.yunx.app
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
+import kotlinx.coroutines.launch
 import com.yunx.app.data.network.XunleiDeviceFingerprint
 import com.yunx.app.ui.MainScreen
 import com.yunx.app.ui.clipboard.ClipboardLinkController
@@ -59,17 +61,22 @@ fun main(args: Array<String>) {
     )
 
     application {
+        val scope = rememberCoroutineScope()
         // 关闭时先淡出窗口再退出，消除原生窗口销毁瞬间的白屏闪烁
         var mainWindow: java.awt.Frame? = null
         // 关闭请求信号：点击窗口 X 时置 true，由 MainScreen 决定退出 / 托盘 / 询问
         var closeRequested by remember { mutableStateOf(false) }
+        // 抑制关闭请求：程序化隐藏窗口（最小化到托盘）时为 true，避免 onCloseRequest 重跑导致弹窗闪烁
+        var suppressCloseRequest by remember { mutableStateOf(false) }
         // 启动器闪屏模式（launcher 注入 YUNXPC_SPLASH=1）：窗口可见性由 Compose 控制，
         // WindowFx 在窗口显示瞬间把透明度压到 0，内容首帧就绪后渐入，与闪屏淡出交叉衔接。
         // 注意：不能用 Window(visible=false) + 外部 setVisible(true)——Compose 状态同步会
         // 把可见性回滚，导致窗口永远不显示（进程存活但无窗口）。
         val splashMode = System.getenv("YUNXPC_SPLASH") == "1"
         Window(
-            onCloseRequest = { closeRequested = true },
+            onCloseRequest = {
+                if (!suppressCloseRequest) closeRequested = true
+            },
             title = "云析 YunX-Desktop",
             state = WindowState(size = DpSize(1100.dp, 760.dp)),
             icon = remember { loadWindowIcon() },
@@ -107,6 +114,16 @@ fun main(args: Array<String>) {
                         val w = mainWindow
                         if (w != null) WindowFx.fadeOutThen(w) { exitApplication() }
                         else exitApplication()
+                    },
+                    onMinimizeToTray = {
+                        // 隐藏窗口前先抑制关闭请求，避免 Compose 把 hide 当作 close 重跑逻辑
+                        suppressCloseRequest = true
+                        mainWindow?.isVisible = false
+                        // 延迟解除抑制（确保 hide 事件已消费完毕）
+                        scope.launch {
+                            kotlinx.coroutines.delay(50)
+                            suppressCloseRequest = false
+                        }
                     }
                 )
             }

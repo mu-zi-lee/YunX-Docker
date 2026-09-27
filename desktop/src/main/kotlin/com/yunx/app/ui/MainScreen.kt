@@ -130,7 +130,9 @@ fun MainScreen(
     /** 关闭逻辑处理完毕后回调（重置信号） */
     onCloseHandled: () -> Unit = {},
     /** 执行退出应用（淡出窗口 → exitApplication） */
-    onExitApplication: () -> Unit = {}
+    onExitApplication: () -> Unit = {},
+    /** 最小化到系统托盘（由 Main.kt 实现，含关闭请求抑制） */
+    onMinimizeToTray: () -> Unit = {}
 ) {
     var currentTab by rememberSaveable { mutableStateOf(MainTab.Resolve) }
     var showQuarkLogin by rememberSaveable { mutableStateOf(false) }
@@ -213,11 +215,9 @@ fun MainScreen(
 
     // 隐藏主窗口到系统托盘
     val minimizeToTray: () -> Unit = {
-        val w = ClipboardLinkController.mainWindow
-        if (w != null) {
-            w.isVisible = false
-            TrayManager.showNotification("云析", "已最小化到系统托盘，下载仍在后台继续")
-        }
+        // 委托给 Main.kt 的实现（含关闭请求抑制，避免 hide 触发 onCloseRequest 重跑）
+        onMinimizeToTray()
+        TrayManager.showNotification("云析", "已最小化到系统托盘，下载仍在后台继续")
     }
 
     // 监听关闭请求信号

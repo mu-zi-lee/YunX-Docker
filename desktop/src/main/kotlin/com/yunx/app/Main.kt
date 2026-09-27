@@ -12,6 +12,7 @@ import androidx.compose.ui.window.application
 import com.yunx.app.data.network.XunleiDeviceFingerprint
 import com.yunx.app.ui.MainScreen
 import com.yunx.app.ui.clipboard.ClipboardLinkController
+import com.yunx.app.ui.clipboard.TrayMenuController
 import com.yunx.app.ui.jcef.JcefHolder
 import com.yunx.app.ui.theme.ComposeEmptyActivityTheme
 import com.yunx.app.util.TrayManager
@@ -93,12 +94,8 @@ fun main(args: Array<String>) {
                 TrayManager.loadTrayIcon()?.let { icon ->
                     TrayManager.install(
                         image = icon,
-                        onShowMainWindow = { showMainWindowFromTray(mainWindow) },
-                        onExit = {
-                            val w = mainWindow
-                            if (w != null) WindowFx.fadeOutThen(w) { exitApplication() }
-                            else exitApplication()
-                        }
+                        onLeftClick = { showMainWindowFromTray(mainWindow) },
+                        onRightClick = { x, y -> TrayMenuController.requestShow(x, y) }
                     )
                 }
             }

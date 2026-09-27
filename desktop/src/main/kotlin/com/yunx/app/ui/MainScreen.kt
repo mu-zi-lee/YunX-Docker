@@ -77,6 +77,8 @@ import com.yunx.app.data.repository.XunleiResolveRepository
 import com.yunx.app.ui.clipboard.ClipboardLinkController
 import com.yunx.app.ui.clipboard.ClipboardLinkDetector
 import com.yunx.app.ui.clipboard.ClipboardLinkPopup
+import com.yunx.app.ui.clipboard.TrayMenuController
+import com.yunx.app.ui.clipboard.TrayMenuPopup
 import com.yunx.app.ui.components.OverlayDialogHost
 import com.yunx.app.ui.login.BaiduLoginScreen
 import com.yunx.app.ui.login.C139LoginScreen
@@ -730,6 +732,22 @@ fun MainScreen(
         // 可在「设置 → 用户体验」中关闭；切换 Tab 返回时重新读取设置值。
         ClipboardLinkDetector(settings = settings)
         ClipboardLinkPopup()
+
+        // 托盘右键菜单（Compose 风格，替代 AWT PopupMenu）
+        TrayMenuPopup(
+            onShowMainWindow = {
+                val w = ClipboardLinkController.mainWindow
+                if (w != null) {
+                    w.isVisible = true
+                    val wasOnTop = w.isAlwaysOnTop
+                    w.isAlwaysOnTop = true
+                    w.toFront()
+                    w.requestFocus()
+                    w.isAlwaysOnTop = wasOnTop
+                }
+            },
+            onExit = onExitApplication
+        )
 
         // 消费 ClipboardLinkController.openRequest：用户在弹窗点「打开」时切到解析页 + 启动解析 + 主窗口前台。
         // ClipboardLinkController.openRequest 是 mutableStateOf（Compose State），但用轮询消费更可靠。

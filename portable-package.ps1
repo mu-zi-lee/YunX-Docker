@@ -15,11 +15,20 @@ Write-Host "Portable package working directory: $root" -ForegroundColor Cyan
 $JDK = Ensure-Jdk -RequireJPackage
 Write-Host "[OK] Using JDK: $JDK" -ForegroundColor Green
 
+# ---- 版本号单一来源：仓库根 version.txt（改版本只动这一个文件）----
+$AppVersion = (Get-Content (Join-Path $root "version.txt") -Raw).Trim()
+if (-not $AppVersion) { throw "version.txt missing or empty (expect a version like 1.2.2)" }
+Write-Host "[OK] App version: $AppVersion" -ForegroundColor Green
+
 Write-Host ""
-Write-Host "[1/5] Gradle: build jar + export runtime libs..." -ForegroundColor Cyan
-$buildOut = Invoke-Gradle ":desktop:jar" ":desktop:exportRuntimeLibs" "--no-build-cache" "--console=plain" 2>&1 | Out-String
+Write-Host "[1/5] Gradle: build jar + native darkmode.dll + export runtime libs..." -ForegroundColor Cyan
+$buildOut = Invoke-Gradle ":desktop:jar" ":desktop:compileDarkMode" ":desktop:exportRuntimeLibs" "--no-build-cache" "--console=plain" 2>&1 | Out-String
 Write-Host $buildOut
 if ($buildOut -match "BUILD FAILED|FAILURE:") { throw "gradle export failed" }
+
+# 暗色桥接 DLL（由 :desktop:compileDarkMode 用 MSVC 编译，需要 cl；缺失则中止）
+$darkModeDll = Join-Path $root "desktop\build\native\darkmode.dll"
+if (-not (Test-Path $darkModeDll)) { throw "darkmode.dll not found: $darkModeDll" }
 
 Write-Host ""
 Write-Host "[2/5] Assembling portable-libs folder..." -ForegroundColor Cyan
@@ -71,7 +80,7 @@ $jpackageExe = Join-Path $JDK "bin\jpackage.exe"
   --type app-image `
   --dest release `
   --name YunX-Desktop `
-  --app-version 1.2.2 `
+  --app-version $AppVersion `
   --vendor "YunX-Desktop" `
   --description "YunX-Desktop - netdisk share-link parser and high-speed downloader" `
   --input portable-libs `
@@ -94,20 +103,38 @@ $launcherExe = Join-Path $outDir "YunX-Desktop.exe"
 $launcherIco = Join-Path $root "YunX-Desktop.ico"
 $launcherTmp = Join-Path $root "build\YunX-Desktop-launcher.exe"
 if (-not (Test-Path $csc)) { throw "csc.exe not found at $csc" }
+# 生成程序集版本属性：csc 据此写入 Win32 版本资源。缺了它资源管理器/任务管理器里
+# 的 YunX-Desktop.exe 会显示 0.0.0.0、产品名为空
+$launcherInfo = Join-Path $root "build\LauncherVersion.cs"
+$launcherInfoDir = Split-Path -Parent $launcherInfo
+if (-not (Test-Path $launcherInfoDir)) { New-Item -ItemType Directory -Force -Path $launcherInfoDir | Out-Null }
+@"
+using System.Reflection;
+
+[assembly: AssemblyTitle("云析 YunX-Desktop")]
+[assembly: AssemblyProduct("云析 YunX-Desktop")]
+[assembly: AssemblyCompany("tidain")]
+[assembly: AssemblyCopyright("Copyright (C) 2026 tidain")]
+[assembly: AssemblyDescription("网盘分享链接解析与高速下载器")]
+[assembly: AssemblyVersion("$AppVersion")]
+[assembly: AssemblyFileVersion("$AppVersion")]
+[assembly: AssemblyInformationalVersion("$AppVersion")]
+"@ | Set-Content -Path $launcherInfo -Encoding UTF8
 # 先编译到 build\ 再覆盖：直接写正在使用的 release exe 可能被杀软/文件锁拒绝
 & $csc /nologo /target:winexe /platform:anycpu /optimize+ `
   "/win32icon:$launcherIco" `
   "/r:System.Windows.Forms.dll" `
   "/r:System.Drawing.dll" `
   "/out:$launcherTmp" `
-  "$launcherSrc"
+  "$launcherSrc" `
+  "$launcherInfo"
 if ($LASTEXITCODE -ne 0) { throw "launcher compile failed with exit $LASTEXITCODE" }
 Copy-Item $launcherTmp $launcherExe -Force
 if ($LASTEXITCODE -ne 0) { throw "launcher compile failed with exit $LASTEXITCODE" }
 Write-Host "Custom launcher installed: $launcherExe" -ForegroundColor Green
 
 Write-Host ""
-Write-Host "[5/5] Extracting Skiko native resources (DLL/icudtl.dat)..." -ForegroundColor Cyan
+Write-Host "[5/5] Extracting Skiko native resources (DLL/icudtl.dat) + darkmode.dll..." -ForegroundColor Cyan
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $skikoJar = Get-ChildItem $libs -Filter "skiko-awt-runtime-windows-x64*.jar" | Select-Object -First 1 -ExpandProperty FullName
 if (-not (Test-Path $skikoJar)) {
@@ -123,6 +150,9 @@ foreach ($entry in $zip.Entries) {
     $s = $entry.Open(); $fs = [IO.File]::Create($target); $s.CopyTo($fs); $fs.Close(); $s.Close()
 }
 $zip.Dispose()
+# 暗色桥接 DLL 与 skiko 原生库同放 app\：启动器已把 app\ 加进 java.library.path，
+# 应用的 System.loadLibrary("darkmode") 才能找到它
+Copy-Item $darkModeDll $appDir -Force
 $nativeCount = (Get-ChildItem $appDir -File -Filter "*.dll").Count
 Write-Host "Copied native DLLs: $nativeCount" -ForegroundColor Green
 

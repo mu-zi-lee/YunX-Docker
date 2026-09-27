@@ -77,8 +77,6 @@ import com.yunx.app.data.repository.XunleiResolveRepository
 import com.yunx.app.ui.clipboard.ClipboardLinkController
 import com.yunx.app.ui.clipboard.ClipboardLinkDetector
 import com.yunx.app.ui.clipboard.ClipboardLinkPopup
-import com.yunx.app.ui.clipboard.TrayMenuController
-import com.yunx.app.ui.clipboard.TrayMenuPopup
 import com.yunx.app.ui.components.OverlayDialogHost
 import com.yunx.app.ui.login.BaiduLoginScreen
 import com.yunx.app.ui.login.C139LoginScreen
@@ -203,7 +201,9 @@ fun MainScreen(
             saveDirProvider = { settings.downloadDirUri },
             concurrencyProvider = { settings.maxConcurrentDownloads },
             speedLimitProvider = { settings.downloadSpeedLimit },
-            retryCountProvider = { settings.downloadRetryCount }
+            retryCountProvider = { settings.downloadRetryCount },
+            keepAwakeProvider = { settings.keepAwakeWhileDownloading },
+            showSpeedProvider = { settings.notificationShowSpeed }
         )
     }
 
@@ -720,7 +720,14 @@ fun MainScreen(
                     }
                 }
                 when (choice) {
-                    CloseChoice.TRAY -> minimizeToTray()
+                    CloseChoice.TRAY -> {
+                        // 等待弹窗淡出完成（140ms）后再隐藏窗口，
+                        // 否则窗口恢复时弹窗残留导致闪烁
+                        scope.launch {
+                            kotlinx.coroutines.delay(150)
+                            minimizeToTray()
+                        }
+                    }
                     CloseChoice.EXIT -> onExitApplication()
                     CloseChoice.CANCEL -> {}
                 }
@@ -733,21 +740,7 @@ fun MainScreen(
         ClipboardLinkDetector(settings = settings)
         ClipboardLinkPopup()
 
-        // 托盘右键菜单（Compose 风格，替代 AWT PopupMenu）
-        TrayMenuPopup(
-            onShowMainWindow = {
-                val w = ClipboardLinkController.mainWindow
-                if (w != null) {
-                    w.isVisible = true
-                    val wasOnTop = w.isAlwaysOnTop
-                    w.isAlwaysOnTop = true
-                    w.toFront()
-                    w.requestFocus()
-                    w.isAlwaysOnTop = wasOnTop
-                }
-            },
-            onExit = onExitApplication
-        )
+        // 托盘菜单由 Main.kt 的 Tray 组件处理（原生 Win32 菜单）
 
         // 消费 ClipboardLinkController.openRequest：用户在弹窗点「打开」时切到解析页 + 启动解析 + 主窗口前台。
         // ClipboardLinkController.openRequest 是 mutableStateOf（Compose State），但用轮询消费更可靠。

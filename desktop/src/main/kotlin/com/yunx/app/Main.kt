@@ -14,10 +14,11 @@ import kotlinx.coroutines.launch
 import com.yunx.app.data.network.XunleiDeviceFingerprint
 import com.yunx.app.ui.MainScreen
 import com.yunx.app.ui.clipboard.ClipboardLinkController
-import com.yunx.app.ui.clipboard.TrayMenuController
 import com.yunx.app.ui.jcef.JcefHolder
 import com.yunx.app.ui.theme.ComposeEmptyActivityTheme
+import com.yunx.app.util.DarkMode
 import com.yunx.app.util.TrayManager
+import com.yunx.app.util.Win32PopupMenu
 import com.yunx.app.util.WindowFx
 import androidx.compose.ui.graphics.toComposeImageBitmap
 
@@ -36,6 +37,8 @@ fun main(args: Array<String>) {
 
     // 桌面上下文初始化（数据目录等）
     AppContext.init()
+    // 原生暗色模式：让 Win32 原生菜单（托盘右键）跟随系统暗色。必须在创建任何窗口前调用。
+    DarkMode.enable()
     // 迅雷设备指纹（进程启动时初始化一次，等价原 Application.onCreate）
     XunleiDeviceFingerprint.init()
 
@@ -73,6 +76,7 @@ fun main(args: Array<String>) {
         // 注意：不能用 Window(visible=false) + 外部 setVisible(true)——Compose 状态同步会
         // 把可见性回滚，导致窗口永远不显示（进程存活但无窗口）。
         val splashMode = System.getenv("YUNXPC_SPLASH") == "1"
+
         Window(
             onCloseRequest = {
                 if (!suppressCloseRequest) closeRequested = true
@@ -96,13 +100,30 @@ fun main(args: Array<String>) {
                     (window as? java.awt.Frame)?.let { WindowFx.scheduleFadeIn(it) }
                 }
             }
-            // 安装系统托盘图标（启动时即安装，便于「最小化到托盘」功能使用）
+            // 系统托盘：JNA 调 Win32 TrackPopupMenu（原生菜单，中文正常，暗色跟随系统）
             androidx.compose.runtime.LaunchedEffect(Unit) {
                 TrayManager.loadTrayIcon()?.let { icon ->
                     TrayManager.install(
                         image = icon,
                         onLeftClick = { showMainWindowFromTray(mainWindow) },
-                        onRightClick = { x, y -> TrayMenuController.requestShow(x, y) }
+                        onRightClick = { x, y ->
+                            val cmd = Win32PopupMenu.show(
+                                items = listOf(
+                                    "显示主窗口" to 1,
+                                    "-" to 0,
+                                    "退出" to 2
+                                ),
+                                x = x, y = y
+                            )
+                            when (cmd) {
+                                1 -> showMainWindowFromTray(mainWindow)
+                                2 -> {
+                                    val w = mainWindow
+                                    if (w != null) WindowFx.fadeOutThen(w) { exitApplication() }
+                                    else exitApplication()
+                                }
+                            }
+                        }
                     )
                 }
             }
@@ -138,6 +159,10 @@ fun main(args: Array<String>) {
 private fun showMainWindowFromTray(window: java.awt.Frame?) {
     val w = window ?: return
     w.isVisible = true
+    // 从最小化状态恢复（最小化到任务栏时 extendedState 含 ICONIFIED 位）
+    if (w.extendedState and java.awt.Frame.ICONIFIED != 0) {
+        w.extendedState = java.awt.Frame.NORMAL
+    }
     val wasOnTop = w.isAlwaysOnTop
     w.isAlwaysOnTop = true
     w.toFront()

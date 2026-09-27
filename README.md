@@ -24,7 +24,7 @@
 - **下载任务管理**：暂停 / 继续 / 删除 / 打开文件 / 在资源管理器中显示 / 复制直链 / 复制分享链接
 - **剪贴板分享链接检测**：复制分享链接时右下角自动弹出提示卡片（可在设置中开关），点击一键打开解析
 - **解析链接历史**：自动记录解析过的分享链接（1 小时去重），支持搜索、复用提取码、删除与清空
-- **Windows 通知中心进度**：下载进度实时显示为 toast 进度条（多任务自动聚合 + 实时速度）
+- **Windows 通知中心进度**：下载进度实时显示为 toast 进度条（多任务自动聚合 + 实时速度），同一条通知原地刷新（不重复弹横幅、不重复响铃）；若系统拒绝送达，会自动创建所需的开始菜单快捷方式兜底
 - **阻止电脑休眠**：下载期间通过 `SetThreadExecutionState` 阻止系统睡眠，任务结束自动恢复
 - **网盘登录**（三种方式，任选其一）：
   - **内嵌浏览器登录（推荐）**：夸克 / UC / 百度 / 139 登录页内直接打开真实 Chromium 网页（JCEF 132），登录后自动检测并保存 Cookie，全程无感
@@ -38,14 +38,23 @@
 
 ## 构建与运行
 
-要求：Windows 10/11 x64。零手动环境配置 —— 缺 JDK 自动下载（`jdk-setup.ps1`），Gradle 发行版由 wrapper 自动拉取，Inno Setup 6 缺失时安装器脚本会自动下载并静默安装。
+要求：Windows 10/11 x64。
+
+- **C++ 编译器（托盘菜单配色需要）**：托盘右键菜单是 Win32 原生菜单，其「亮/暗跟随系统配色」的
+  桥接层 `native/darkmode.cpp` 需编译为 `darkmode.dll`。构建时优先调用 `cl.exe`（需 Visual Studio
+  2019/2022 并勾选「使用 C++ 的桌面开发」工作负载），否则回退 `g++`（MinGW）。
+  **缺编译器时 `run` / `package` / `installer` 会在这一步失败**；`run.ps1 build` 只编译 Kotlin，不受影响。
+- 其余零手动配置：缺 JDK 自动下载（`jdk-setup.ps1`），Gradle 发行版由 wrapper 自动拉取，
+  Inno Setup 6 缺失时安装器脚本会自动下载并静默安装。
+- **版本号单一来源**：根目录 `version.txt`。jpackage 版本、便携包/安装程序里的程序版本与文件名、
+  应用内显示（关于页 / 更新检测）全部由它派生，**发版只改这一个文件**。
 
 ```powershell
 git clone https://github.com/tidain/YunX-Desktop.git
 cd YunX-Desktop
 
-.\run.ps1 run        # 编译并启动（开发）
-.\run.ps1 build      # 仅编译
+.\run.ps1 run        # 编译并启动（开发，含 darkmode.dll）
+.\run.ps1 build      # 仅编译 Kotlin（不需要 C++ 编译器）
 .\run.ps1 package    # 免安装便携版 → release\YunX-Desktop\
 .\run.ps1 installer  # 单文件安装程序 → release\YunX-Desktop-setup-*.exe
 ```

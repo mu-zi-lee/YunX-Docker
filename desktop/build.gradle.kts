@@ -45,9 +45,92 @@ kotlin {
     jvmToolchain(17)
 }
 
+// ---- 版本号单一来源：仓库根目录 version.txt（jpackage / 便携包 / 安装包 / 应用内版本全部由它派生）----
+val appVersion = rootProject.file("version.txt").readText().trim()
+require(appVersion.matches(Regex("""\d+(\.\d+)*"""))) { "version.txt 内容非法: '$appVersion'" }
+
+// 生成 Kotlin 常量供 UpdateChecker 使用，避免应用内再维护一份硬编码
+val generateAppVersion by tasks.registering {
+    val outDir = layout.buildDirectory.dir("generated/appVersion/kotlin")
+    val version = appVersion
+    outputs.dir(outDir)
+    inputs.property("version", version)
+    doLast {
+        val pkgDir = outDir.get().asFile.resolve("com/yunx/app")
+        pkgDir.mkdirs()
+        pkgDir.resolve("AppVersion.kt").writeText(
+            """
+            |package com.yunx.app
+            |
+            |/** 由根目录 version.txt 生成，请勿手改 */
+            |internal const val APP_VERSION = "$version"
+            |""".trimMargin() + "\n"
+        )
+    }
+}
+kotlin.sourceSets["main"].kotlin.srcDir(generateAppVersion)
+
 tasks.withType<Test> {
     useJUnit()
     jvmArgs("-Dfile.encoding=UTF-8", "-Dsun.jnu.encoding=UTF-8")
+}
+
+// 编译 native/darkmode.cpp → build/native/darkmode.dll（托盘原生菜单暗色桥接层）
+val nativeSrcDir = file("native")
+val nativeOutDir = layout.buildDirectory.dir("native").get().asFile
+val darkModeSrc = File(nativeSrcDir, "darkmode.cpp")
+val darkModeOut = File(nativeOutDir, "darkmode.dll")
+
+// 定位 MSVC 的 vcvars64.bat（cl 直接调会找不到 windows.h / CRT 库，必须先 call 它）
+fun findMsvcVcvars(): File? {
+    val roots = listOf(
+        "C:/Program Files/Microsoft Visual Studio/2022",
+        "C:/Program Files (x86)/Microsoft Visual Studio/2022",
+        "C:/Program Files/Microsoft Visual Studio/2019",
+        "C:/Program Files (x86)/Microsoft Visual Studio/2019"
+    )
+    for (root in roots) {
+        val f = File(root)
+        if (!f.isDirectory) continue
+        val editions = f.listFiles() ?: continue
+        for (ed in editions) {
+            val bat = File(ed, "VC/Auxiliary/Build/vcvars64.bat")
+            if (bat.isFile) return bat
+        }
+    }
+    return null
+}
+
+val compileDarkMode by tasks.registering(Exec::class) {
+    val vcvars = findMsvcVcvars()
+    inputs.file(darkModeSrc)
+    outputs.file(darkModeOut)
+    doFirst {
+        nativeOutDir.mkdirs()
+    }
+    if (vcvars != null) {
+        commandLine(
+            "cmd", "/c",
+            "call \"${vcvars.absolutePath}\" >nul && " +
+                "cl /nologo /utf-8 /LD \"${darkModeSrc.absolutePath}\" " +
+                "/Fe:\"${darkModeOut.absolutePath}\" " +
+                "/Fo:\"${nativeOutDir.absolutePath}\\\\\" " +
+                "/link /NOENTRY kernel32.lib user32.lib"
+        )
+    } else {
+        // 回退 MinGW
+        commandLine(
+            "g++", "-shared", "-o", darkModeOut.absolutePath,
+            darkModeSrc.absolutePath, "-lkernel32", "-luser32"
+        )
+    }
+}
+
+// 开发运行（:desktop:run）时把 DLL 目录并入 java.library.path，并保留 JDK bin（jawt 等原生库）
+tasks.withType<JavaExec> {
+    dependsOn(compileDarkMode)
+    val jvmBin = File(System.getProperty("java.home"), "bin").absolutePath
+    systemProperty("java.library.path", "${nativeOutDir.absolutePath};$jvmBin")
 }
 
 // 收集运行时依赖 jar 路径（供便携版 app-image 打包）
@@ -77,11 +160,11 @@ compose.desktop {
                 perUserInstall = true
             }
             packageName = "YunX-Desktop"
-            packageVersion = "1.2.2"
+            packageVersion = appVersion
             // 注意：jpackage 参数文件解析不支持非 ASCII 描述（本机报 "Input length = 1"），描述保持纯英文
             description = "YunX-Desktop - netdisk share-link parser and high-speed downloader (desktop port of YunX for Android)"
             vendor = "YunX-Desktop"
-            copyright = "Copyright (C) 2026 YunX-Desktop"
+            copyright = "Copyright (C) 2026 tidain"
         }
     }
 }

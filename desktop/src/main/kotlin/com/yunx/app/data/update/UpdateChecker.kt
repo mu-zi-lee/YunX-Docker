@@ -1,5 +1,6 @@
 package com.yunx.app.data.update
 
+import com.yunx.app.APP_VERSION
 import com.yunx.app.data.network.HttpClients
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -46,8 +47,8 @@ object UpdateChecker {
         return 0
     }
 
-    /** 当前应用版本号（桌面版固定常量，发布时随 packageVersion 同步更新） */
-    const val PC_VERSION = "1.2.2"
+    /** 当前应用版本号，来源：仓库根 version.txt（构建时生成 APP_VERSION，勿在此硬编码） */
+    const val PC_VERSION = APP_VERSION
 
     fun currentVersion(): String = PC_VERSION
 

@@ -158,33 +158,19 @@ class DownloadManager(
     }
     private val toastMeta = ConcurrentHashMap<Long, ToastMeta>()
 
-    /** 通知速度 EMA 平滑（字节/秒），避免速度数字剧烈跳动 */
-    private val toastSpeedEma = AtomicLong(0)
-    private val lastSpeedTs = AtomicLong(0)
-    private val lastSpeedBytes = AtomicLong(0)
-
     /** 更新 Windows 通知中心进度（聚合所有活动任务，1s 节流；非 Windows no-op） */
     private fun notifyProgress(id: Long, fileName: String, new: Long, total: Long) {
         if (total <= 0) return
         val meta = toastMeta[id] ?: ToastMeta(fileName, total).also { toastMeta[id] = it }
         meta.done = new
-        // 速度估算：聚合字节数差分 + EMA 平滑
-        val now = System.currentTimeMillis()
-        val lastT = lastSpeedTs.getAndSet(now)
-        val lastB = lastSpeedBytes.getAndSet(toastMeta.values.sumOf { it.done })
         val doneSum = toastMeta.values.sumOf { it.done }
         val totalSum = toastMeta.values.sumOf { it.total }
-        if (lastT in 1 until now) {
-            val instBps = (doneSum - lastB) * 1000 / (now - lastT)
-            if (instBps >= 0) {
-                val prev = toastSpeedEma.get()
-                toastSpeedEma.set(if (prev == 0L) instBps else (prev * 7 + instBps) / 8)
-            }
-        }
         val first = toastMeta.values.firstOrNull()?.name ?: fileName
         val line1 = if (toastMeta.size > 1) "$first 等 ${toastMeta.size} 个任务" else first
         val statusLine = "${formatSize(doneSum)} / ${formatSize(totalSum)}"
-        val speed = toastSpeedEma.get()
+        // 速度直接取下载页显示的那份（SpeedRecorder 的 250ms 窗口测速）之和，
+        // 不再另算一套 EMA —— 否则两处数字永远对不上
+        val speed = _stats.value.values.sumOf { it.speed }
         val speedText = if (showSpeedProvider() && speed > 0) "${formatSpeed(speed)} ↓" else ""
         WindowsToastNotifier.updateProgress(doneSum, totalSum, line1, statusLine, speedText, "正在下载")
     }

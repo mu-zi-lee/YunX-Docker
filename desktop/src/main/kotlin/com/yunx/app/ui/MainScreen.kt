@@ -57,7 +57,11 @@ import com.yunx.app.data.network.Pan123Api
 import com.yunx.app.data.network.QuarkApi
 import com.yunx.app.data.network.UCApi
 import com.yunx.app.data.network.XunleiApi
+import com.yunx.app.data.db.DownloadTaskEntity
 import com.yunx.app.data.prefs.SettingsRepository
+import com.yunx.app.ui.components.CloseChoice
+import com.yunx.app.ui.components.CloseConfirmDialog
+import com.yunx.app.util.TrayManager
 import com.yunx.app.data.repository.BaiduAccountRepository
 import com.yunx.app.data.repository.BaiduResolveRepository
 import com.yunx.app.data.repository.C139AccountRepository
@@ -118,7 +122,14 @@ import kotlinx.coroutines.launch
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen() {
+fun MainScreen(
+    /** 主窗口 X 按钮点击信号（由 Main.kt 置 true） */
+    closeRequested: Boolean = false,
+    /** 关闭逻辑处理完毕后回调（重置信号） */
+    onCloseHandled: () -> Unit = {},
+    /** 执行退出应用（淡出窗口 → exitApplication） */
+    onExitApplication: () -> Unit = {}
+) {
     var currentTab by rememberSaveable { mutableStateOf(MainTab.Resolve) }
     var showQuarkLogin by rememberSaveable { mutableStateOf(false) }
     var showUCLogin by rememberSaveable { mutableStateOf(false) }
@@ -190,6 +201,48 @@ fun MainScreen() {
             speedLimitProvider = { settings.downloadSpeedLimit },
             retryCountProvider = { settings.downloadRetryCount }
         )
+    }
+
+    // ===== 关闭行为处理 =====
+    val tasks by downloadManager.tasks.collectAsState(initial = emptyList())
+    // 关闭确认弹窗状态
+    var showCloseDialog by remember { mutableStateOf(false) }
+    var closeDialogHasDownloads by remember { mutableStateOf(false) }
+
+    // 隐藏主窗口到系统托盘
+    val minimizeToTray: () -> Unit = {
+        val w = ClipboardLinkController.mainWindow
+        if (w != null) {
+            w.isVisible = false
+            TrayManager.showNotification("云析", "已最小化到系统托盘，下载仍在后台继续")
+        }
+    }
+
+    // 监听关闭请求信号
+    LaunchedEffect(closeRequested) {
+        if (!closeRequested) return@LaunchedEffect
+        val behavior = settings.closeBehavior
+        val hasActiveDownloads = tasks.any {
+            it.status == DownloadTaskEntity.STATUS_DOWNLOADING || it.status == DownloadTaskEntity.STATUS_PENDING
+        }
+        when (behavior) {
+            SettingsRepository.CLOSE_BEHAVIOR_TRAY -> {
+                minimizeToTray()
+            }
+            SettingsRepository.CLOSE_BEHAVIOR_EXIT -> {
+                if (hasActiveDownloads) {
+                    closeDialogHasDownloads = true
+                    showCloseDialog = true
+                } else {
+                    onExitApplication()
+                }
+            }
+            else -> { // CLOSE_BEHAVIOR_ASK
+                closeDialogHasDownloads = hasActiveDownloads
+                showCloseDialog = true
+            }
+        }
+        onCloseHandled()
     }
 
     val viewModel: QuarkAccountViewModel = viewModel(
@@ -650,6 +703,27 @@ fun MainScreen() {
         // 全局弹窗覆盖层（FadeAlertDialog）：窗口内直接绘制，零原生窗口开销。
         // 放在根部最后 → 绘制在所有内容（含全屏覆盖层）之上。
         OverlayDialogHost()
+
+        // 关闭确认弹窗（退出 / 最小化到托盘 / 取消）
+        CloseConfirmDialog(
+            visible = showCloseDialog,
+            hasActiveDownloads = closeDialogHasDownloads,
+            onDismiss = { choice, remember ->
+                showCloseDialog = false
+                if (remember && choice != CloseChoice.CANCEL) {
+                    settings.closeBehavior = when (choice) {
+                        CloseChoice.TRAY -> SettingsRepository.CLOSE_BEHAVIOR_TRAY
+                        CloseChoice.EXIT -> SettingsRepository.CLOSE_BEHAVIOR_EXIT
+                        CloseChoice.CANCEL -> SettingsRepository.CLOSE_BEHAVIOR_ASK
+                    }
+                }
+                when (choice) {
+                    CloseChoice.TRAY -> minimizeToTray()
+                    CloseChoice.EXIT -> onExitApplication()
+                    CloseChoice.CANCEL -> {}
+                }
+            }
+        )
 
         // 剪贴板分享链接检测器：主窗口失焦时若剪贴板有分享链接，触发右下角弹窗。
         // Detector 在 Box 内部以绑定 MainScreen 生命周期；Popup 是独立顶层 Window。

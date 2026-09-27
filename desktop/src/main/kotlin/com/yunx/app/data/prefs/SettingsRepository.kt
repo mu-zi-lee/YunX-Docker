@@ -81,6 +81,18 @@ class SettingsRepository {
             prefs.putBoolean("clipboard_link_detection", value)
         }
 
+    /**
+     * 关闭主窗口时的行为：
+     * - "ask"：每次询问（默认）
+     * - "exit"：直接退出
+     * - "tray"：最小化到系统托盘
+     */
+    var closeBehavior: String
+        get() = prefs.get("close_behavior", CLOSE_BEHAVIOR_ASK)
+        set(value) {
+            prefs.put("close_behavior", value)
+        }
+
     /** 桌面图标样式（桌面版无 activity-alias，保留设置项占位） */
     var appIconVariant: Int
         get() = prefs.getInt("app_icon_variant", 0)
@@ -124,6 +136,13 @@ class SettingsRepository {
         }
 
     companion object {
+        /** 关闭行为：每次询问 */
+        const val CLOSE_BEHAVIOR_ASK = "ask"
+        /** 关闭行为：直接退出 */
+        const val CLOSE_BEHAVIOR_EXIT = "exit"
+        /** 关闭行为：最小化到系统托盘 */
+        const val CLOSE_BEHAVIOR_TRAY = "tray"
+
         const val DEFAULT_DOWNLOAD_THREADS = 32
         const val MAX_DOWNLOAD_THREADS = 512
         const val XUNLEI_DOWNLOAD_THREADS = 8

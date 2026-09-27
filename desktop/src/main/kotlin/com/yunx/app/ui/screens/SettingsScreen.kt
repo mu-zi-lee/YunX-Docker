@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Minimize
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Power
@@ -141,6 +142,9 @@ fun SettingsScreen(
     var keepAwake by remember { mutableStateOf(settingsRepo.keepAwakeWhileDownloading) }
     var showSpeed by remember { mutableStateOf(settingsRepo.notificationShowSpeed) }
     var clipboardDetect by remember { mutableStateOf(settingsRepo.clipboardLinkDetection) }
+    // 关闭主窗口时的行为：ask / exit / tray
+    var closeBehavior by remember { mutableStateOf(settingsRepo.closeBehavior) }
+    var showCloseBehaviorDialog by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -265,6 +269,19 @@ fun SettingsScreen(
                 settingsRepo.clipboardLinkDetection = clipboardDetect
             },
             trailing = { Switch(checked = clipboardDetect, onCheckedChange = null) }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        SettingsItem(
+            icon = Icons.Outlined.Minimize,
+            title = "关闭窗口时",
+            description = when (closeBehavior) {
+                SettingsRepository.CLOSE_BEHAVIOR_TRAY -> "最小化到系统托盘（下载继续）"
+                SettingsRepository.CLOSE_BEHAVIOR_EXIT -> "直接退出应用"
+                else -> "每次询问（默认）"
+            },
+            onClick = { showCloseBehaviorDialog = true }
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -832,6 +849,48 @@ fun SettingsScreen(
         },
         confirmButton = {
             TextButton(onClick = { showRetryDialog = false }) { Text("取消") }
+        }
+    )
+
+    // 关闭窗口行为选择
+    FadeAlertDialog(
+        visible = showCloseBehaviorDialog,
+        onDismissRequest = { showCloseBehaviorDialog = false },
+        title = { Text("关闭窗口时") },
+        text = {
+            val options = listOf(
+                SettingsRepository.CLOSE_BEHAVIOR_ASK to "每次询问",
+                SettingsRepository.CLOSE_BEHAVIOR_EXIT to "直接退出应用",
+                SettingsRepository.CLOSE_BEHAVIOR_TRAY to "最小化到系统托盘"
+            )
+            Column {
+                options.forEach { (value, label) ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = closeBehavior == value,
+                            onClick = {
+                                closeBehavior = value
+                                settingsRepo.closeBehavior = value
+                                showCloseBehaviorDialog = false
+                            }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(label, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "提示：选择「直接退出」时，若有下载任务进行中会再次询问。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { showCloseBehaviorDialog = false }) { Text("取消") }
         }
     )
 }

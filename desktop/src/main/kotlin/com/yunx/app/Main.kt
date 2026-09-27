@@ -1,6 +1,9 @@
 package com.yunx.app
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
@@ -11,6 +14,7 @@ import com.yunx.app.ui.MainScreen
 import com.yunx.app.ui.clipboard.ClipboardLinkController
 import com.yunx.app.ui.jcef.JcefHolder
 import com.yunx.app.ui.theme.ComposeEmptyActivityTheme
+import com.yunx.app.util.TrayManager
 import com.yunx.app.util.WindowFx
 import androidx.compose.ui.graphics.toComposeImageBitmap
 
@@ -56,17 +60,15 @@ fun main(args: Array<String>) {
     application {
         // 关闭时先淡出窗口再退出，消除原生窗口销毁瞬间的白屏闪烁
         var mainWindow: java.awt.Frame? = null
+        // 关闭请求信号：点击窗口 X 时置 true，由 MainScreen 决定退出 / 托盘 / 询问
+        var closeRequested by remember { mutableStateOf(false) }
         // 启动器闪屏模式（launcher 注入 YUNXPC_SPLASH=1）：窗口可见性由 Compose 控制，
         // WindowFx 在窗口显示瞬间把透明度压到 0，内容首帧就绪后渐入，与闪屏淡出交叉衔接。
         // 注意：不能用 Window(visible=false) + 外部 setVisible(true)——Compose 状态同步会
         // 把可见性回滚，导致窗口永远不显示（进程存活但无窗口）。
         val splashMode = System.getenv("YUNXPC_SPLASH") == "1"
         Window(
-            onCloseRequest = {
-                val w = mainWindow
-                if (w != null) WindowFx.fadeOutThen(w) { exitApplication() }
-                else exitApplication()
-            },
+            onCloseRequest = { closeRequested = true },
             title = "云析 YunX-Desktop",
             state = WindowState(size = DpSize(1100.dp, 760.dp)),
             icon = remember { loadWindowIcon() },
@@ -86,11 +88,47 @@ fun main(args: Array<String>) {
                     (window as? java.awt.Frame)?.let { WindowFx.scheduleFadeIn(it) }
                 }
             }
+            // 安装系统托盘图标（启动时即安装，便于「最小化到托盘」功能使用）
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                TrayManager.loadTrayIcon()?.let { icon ->
+                    TrayManager.install(
+                        image = icon,
+                        onShowMainWindow = { showMainWindowFromTray(mainWindow) },
+                        onExit = {
+                            val w = mainWindow
+                            if (w != null) WindowFx.fadeOutThen(w) { exitApplication() }
+                            else exitApplication()
+                        }
+                    )
+                }
+            }
             ComposeEmptyActivityTheme {
-                MainScreen()
+                MainScreen(
+                    closeRequested = closeRequested,
+                    onCloseHandled = { closeRequested = false },
+                    onExitApplication = {
+                        val w = mainWindow
+                        if (w != null) WindowFx.fadeOutThen(w) { exitApplication() }
+                        else exitApplication()
+                    }
+                )
             }
         }
     }
+}
+
+/**
+ * 从系统托盘恢复主窗口：显示并切到前台。
+ * Windows 下 toFront() 单独调用不可靠，需配合 isAlwaysOnTop 瞬时切换。
+ */
+private fun showMainWindowFromTray(window: java.awt.Frame?) {
+    val w = window ?: return
+    w.isVisible = true
+    val wasOnTop = w.isAlwaysOnTop
+    w.isAlwaysOnTop = true
+    w.toFront()
+    w.requestFocus()
+    w.isAlwaysOnTop = wasOnTop
 }
 
 /**

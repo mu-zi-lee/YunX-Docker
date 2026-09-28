@@ -58,12 +58,21 @@
 
 ## 构建与运行
 
+### 下载与使用
+
+- 前往 [Releases](https://github.com/tidain/YunX-Desktop/releases) 下载便携版或安装版，根据对应的版本进行解压或安装后即可使用
+
+### 构建
+
 要求：Windows 10/11 x64。
 
-- **C++ 编译器（托盘菜单配色需要）**：托盘右键菜单是 Win32 原生菜单，其「亮/暗跟随系统配色」的
-  桥接层 `native/darkmode.cpp` 需编译为 `darkmode.dll`。构建时优先调用 `cl.exe`（需 Visual Studio
-  2019/2022 并勾选「使用 C++ 的桌面开发」工作负载），否则回退 `g++`（MinGW）。
-  **缺编译器时** **`run`** **/** **`package`** **/** **`installer`** **会在这一步失败**；`run.ps1 build` 只编译 Kotlin，不受影响。
+- **C++ 编译器（托盘菜单配色需要）**：
+
+  - 托盘右键菜单是 Win32 原生菜单，其「亮/暗跟随系统配色」的桥接层 `native/darkmode.cpp` 需编译为 `darkmode.dll`。
+
+  - 构建时优先调用 `cl.exe`（需 Visual Studio 2019/2022 并勾选「使用 C++ 的桌面开发」工作负载），否则回退 `g++`（MinGW）。
+
+  - **缺编译器时** **`run`** **/** **`package`** **/** **`installer`** **会在这一步失败**；`run.ps1 build` 只编译 Kotlin，不受影响。
 
 - 其余零手动配置：缺 JDK 自动下载（`jdk-setup.ps1`），Gradle 发行版由 wrapper 自动拉取，
   Inno Setup 6 缺失时安装器脚本会自动下载并静默安装。

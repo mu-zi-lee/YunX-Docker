@@ -1,14 +1,47 @@
-# YunX-Desktop（云析桌面版）
+<div align="center">
 
-[云析 YunX](https://github.com/CYQawa/YunX)（Android 网盘分享链接解析 + 高速下载器）的 **Windows 桌面移植**。
+<img src="desktop/src/main/resources/icon.png" width="120" alt="云析 YunX-Desktop" />
 
-> 原安卓项目仓库：[CYQawa/YunX](https://github.com/CYQawa/YunX) ｜ PC 移植版仓库：[tidain/YunX-Desktop](https://github.com/tidain/YunX-Desktop)
+# 云析桌面版 · YunX-Desktop
 
-粘贴网盘分享链接，浏览分享内容并直接高速下载文件 —— 无需手机，全程在电脑上完成。
+**粘贴分享链接，直接高速下载 —— 云析 YunX 的 Windows 桌面移植**
+
+识别夸克 / UC / 迅雷 / 百度 / 139 / 123 分享链接，自动匹配提取码，Range 分片并发 + 断点续传。
+
+[![Release](https://img.shields.io/github/v/release/tidain/YunX-Desktop?style=flat-square\&label=release\&color=4C8BF5)](https://github.com/tidain/YunX-Desktop/releases/latest)
+[![Stars](https://img.shields.io/github/stars/tidain/YunX-Desktop?style=flat-square\&logo=github\&color=4C8BF5)](https://github.com/tidain/YunX-Desktop/stargazers)
+[![License](https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square)](./LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?style=flat-square\&logo=windows\&logoColor=white)](#构建)
+[![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?style=flat-square\&logo=kotlin\&logoColor=white)](https://kotlinlang.org/)
+[![Compose](https://img.shields.io/badge/Compose%20Multiplatform-Desktop-4285F4?style=flat-square\&logo=jetpackcompose\&logoColor=white)](https://www.jetbrains.com/lp/compose-multiplatform/)
+
+[下载最新版](https://github.com/tidain/YunX-Desktop/releases/latest) · [功能](docs/FEATURES.md) · [使用](docs/USAGE.md) · [构建](docs/BUILD.md) · [常见问题](#常见问题) · [与上游差异](docs/UPSTREAM-DIFF.md)
+
+</div>
+
+***
+
+> **云析永远免费开源。** 如果你是在任何地方「花钱买到」的，说明你被骗了，请立即退款。
+> 任何收费版本均为二次打包的诈骗版本，与本项目无关。
+
+> **本项目使用 AGPL-3.0 开源协议。** 基于上游 [CYQawa/YunX](https://github.com/CYQawa/YunX)（Android）移植，
+> 若你使用了本项目的代码，请同样以 AGPL-3.0 开放源代码。
+
+## 简介
+
+云析 YunX 的 **Windows 桌面移植版**：粘贴网盘分享链接，浏览分享内容并直接高速下载文件，全程在电脑上完成。
+提供**免安装便携版**（整个文件夹拷走即用）与**安装版**（开始菜单 / 桌面快捷方式，可卸载）两种分发形式。
+
+## 截图
+
+|                                                          |                                                            |
+| :------------------------------------------------------: | :--------------------------------------------------------: |
+| <img src="docs/images/主界面.png" width="430" alt="主界面" />   | <img src="docs/images/网盘登录.png" width="430" alt="网盘登录" />   |
+|                           主界面                           |                           网盘登录                           |
+| <img src="docs/images/设置.png" width="430" alt="设置" />     | <img src="docs/images/关于.png" width="430" alt="关于" />     |
+|                            设置                            |                            关于                            |
 
 ## 支持平台
-
-> **不建议用百度网盘，可能导致账号被风控！！！**
 
 - 夸克网盘
 
@@ -22,63 +55,55 @@
 
 - 123 云盘
 
+> \[!WARNING]
+> **不建议使用百度网盘，可能导致账号被风控！**
+
 ## 功能
 
-- **分享链接解析**：识别夸克 / UC / 迅雷 / 百度 / 139 / 123 的分享链接，自动匹配提取码
+- **分享链接解析** —— 识别 6 家网盘分享链接，自动匹配提取码
 
-- **高速下载**：Range 分片并发 + 断点续传 + 自动重试 + 全局限速；弹性区按字节顺序分配，保证分片物理相邻、连接复用率稳定
+- **高速下载** —— Range 分片并发 + 断点续传 + 失败自动重试 + 全局限速
 
-- **下载任务管理**：暂停 / 继续 / 删除 / 打开文件 / 在资源管理器中显示 / 复制直链 / 复制分享链接
+- **通知中心进度** —— 下载进度实时显示为 Windows 通知中心 toast 进度条（多任务聚合 + 实时速度）
 
-- **剪贴板分享链接检测**：复制分享链接时右下角自动弹出提示卡片（可在设置中开关），点击一键打开解析
+- **多种登录方式** —— 内嵌 Chromium 登录 / 一键导入本机浏览器 Cookie / 手动粘贴 Cookie
 
-- **解析链接历史**：自动记录解析过的分享链接（1 小时去重），支持搜索、复用提取码、删除与清空
+- **Windows 系统集成** —— 原生托盘菜单（亮暗跟随系统配色）、原生文件对话框、剪贴板分享链接检测
 
-- **Windows 通知中心进度**：下载进度实时显示为 toast 进度条（多任务自动聚合 + 实时速度），同一条通知原地刷新（不重复弹横幅、不重复响铃）；通知推送失败，会尝试自动创建所需的开始菜单快捷方式兜底（无法保证100%成功通知， 快捷方式创建于 **开始菜单** 文件夹：`%APPDATA%\Microsoft\Windows\Start Menu\Programs\`）
+- **桌面体验** —— 深色模式 + 自定义种子色、链接收藏、解析历史、窗口内弹窗覆盖层
 
-- **阻止电脑休眠**：下载期间通过 `SetThreadExecutionState` 阻止系统睡眠，任务结束自动恢复
+完整功能清单见 **[功能清单](docs/FEATURES.md)**。
 
-- **网盘登录**（三种方式，任选其一）：
+## 与上游的差异
 
-  - **内嵌浏览器登录（推荐）**：夸克 / UC / 百度 / 139 登录页内直接打开真实 Chromium 网页（JCEF 132），登录后自动检测并保存 Cookie，全程无感
+桌面版在**登录方式、系统集成（托盘 / 通知 / 原生对话框）、数据存储、构建分发**上做了较大改造，
+并移除了一部分移动端专属功能。完整清单见 **[与上游的差异](docs/UPSTREAM-DIFF.md)**。
 
-  - **一键自动导入**：扫描本机已装浏览器（Chrome / Edge / Firefox / 360 / QQ 等），自动解密并导入该平台的登录 Cookie（Windows DPAPI；Chrome/Edge 较新版本因「应用绑定加密」可能无法读取，Firefox/360 等始终可用）
+## 技术栈
 
-  - **手动粘贴 Cookie**（兜底）
+| 分类    | 选型                                         |
+| ----- | ------------------------------------------ |
+| 语言    | Kotlin                                     |
+| UI    | Compose Multiplatform（Desktop）+ Material 3 |
+| 持久化   | `sqlite-jdbc`（SQLite）+ `java.util.prefs`   |
+| 网络    | OkHttp 4.12.0（请求 + 分片下载）                   |
+| 内嵌浏览器 | JCEF 132（Chromium）                         |
+| 原生桥接  | JNA（Win32 API）+ 自编 `darkmode.dll`          |
+| 构建分发  | Gradle + jlink + jpackage + Inno Setup     |
 
-  - 迅雷（账号密码 + 短信验证）、123（账号密码换 JWT）—— 纯 HTTP，直接表单登录
+## 使用
 
-- **认证备份**：用户口令派生密钥（PBKDF2）+ AES-GCM 加密 Cookie/JWT，导出为 `.yunx` 备份文件，跨设备恢复
+1. 在「网盘」页登录需要使用的网盘账号（推荐内嵌浏览器登录）
+2. 在「解析」页粘贴分享链接（可带提取码，支持从剪贴板一键粘贴）
+3. 浏览分享内容，点击文件加入下载
+4. 在「下载」页查看进度，支持暂停 / 继续 / 删除 / 打开；进度同步显示在 Windows 通知中心
 
-- **登出彻底清除 Cookie**：退出登录时通过 CEF 的 `delete` 标志清除该平台所有 Cookie，避免残留
+设置项、数据目录、托盘操作见 **[使用说明](docs/USAGE.md)**。
 
-- **Windows 原生对话框**：下载目录选择、备份导入（选择文件）/ 导出（另存为）均为资源管理器同款样式（Vista+ COM IFileDialog）
+## 构建
 
-- **界面**：深色模式 + 自定义种子色（Monet 风格动态取色）+ 链接收藏 + 弹窗统一窗口内覆盖层（无原生窗口阻塞）
-
-## 构建与运行
-
-### 下载与使用
-
-- 前往 [Releases](https://github.com/tidain/YunX-Desktop/releases) 下载便携版或安装版，根据对应的版本进行解压或安装后即可使用
-
-### 构建
-
-要求：Windows 10/11 x64。
-
-- **C++ 编译器（托盘菜单配色需要）**：
-
-  - 托盘右键菜单是 Win32 原生菜单，其「亮/暗跟随系统配色」的桥接层 `native/darkmode.cpp` 需编译为 `darkmode.dll`。
-
-  - 构建时优先调用 `cl.exe`（需 Visual Studio 2019/2022 并勾选「使用 C++ 的桌面开发」工作负载），否则回退 `g++`（MinGW）。
-
-  - **缺编译器时** **`run`** **/** **`package`** **/** **`installer`** **会在这一步失败**；`run.ps1 build` 只编译 Kotlin，不受影响。
-
-- 其余零手动配置：缺 JDK 自动下载（`jdk-setup.ps1`），Gradle 发行版由 wrapper 自动拉取，
-  Inno Setup 6 缺失时安装器脚本会自动下载并静默安装。
-
-- **版本号单一来源**：根目录 `version.txt`。jpackage 版本、便携包/安装程序里的程序版本与文件名、
-  应用内显示（关于页 / 更新检测）全部由它派生，**发版只改这一个文件**。
+要求：Windows 10/11 x64，另需一个 **C++ 编译器**（托盘菜单配色桥接层用；缺它时 `run` / `package` /
+`installer` 会在这一步失败）。JDK、Gradle、Inno Setup 均无需手动安装。
 
 ```powershell
 git clone https://github.com/tidain/YunX-Desktop.git
@@ -90,85 +115,57 @@ cd YunX-Desktop
 .\run.ps1 installer  # 单文件安装程序 → release\YunX-Desktop-setup-*.exe
 ```
 
-也可双击 `run.bat`（走同一入口）。中文向导语言包随仓库分发（`installer\ChineseSimplified.isl`）。
+环境要求、版本号管理与打包产物见 **[构建与打包](docs/BUILD.md)**。
 
-## 打包产物
+## 常见问题
 
-- **便携版**：`release\YunX-Desktop\`（整个文件夹拷走即用，双击 `YunX-Desktop.exe` 运行）
+<details>
+<summary><b>百度网盘下载 / 转存不了？</b></summary>
 
-- **安装程序**：`release\YunX-Desktop-setup-<版本>.exe`（每用户安装到
-  `%LOCALAPPDATA%\Programs\YunX-Desktop`，无需管理员权限，开始菜单/桌面快捷方式「云析」，可卸载）
+账号被风控了，详见上游 issue #9。
 
-## 使用
+</details>
 
-1. 在「网盘」页登录需要用的网盘账号（推荐内嵌浏览器登录）
-2. 在「解析」页粘贴分享链接（可带提取码，支持从剪贴板一键粘贴）
-3. 浏览分享内容，点击文件加入下载
-4. 在「下载」页查看进度，支持暂停 / 继续 / 删除 / 打开；进度同步显示在 Windows 通知中心
+<details>
+<summary><b>便携版和安装版有什么区别？</b></summary>
 
-## 数据目录
+便携版是免安装的文件夹，拷到任意位置双击 `YunX-Desktop.exe` 即可运行；
+安装版走安装向导，安装到 `%LOCALAPPDATA%\Programs\YunX-Desktop`，并创建开始菜单 / 桌面快捷方式，可在设置中卸载。
+两者功能完全一致。
 
-`%USERPROFILE%\.yunx-pc\`：`yunx.db`（任务/凭证库）、`credential.key`（加密密钥）、
-`cache/download_tmp`（下载分片）、`files/yunx-pc.log`（运行日志）。
-设置存于 Windows 注册表 `HKEY_CURRENT_USER\Software\JavaSoft\Prefs\yunx`。
+</details>
 
-## 与上游的差异
+<details>
+<summary><b>下载时看不到 Windows 通知中心的通知？</b></summary>
 
-桌面版在**登录方式、系统集成（托盘 / 通知 / 原生对话框）、数据存储、构建分发**上做了较大改造，
-并移除了一部分移动端专属功能。**完整清单见** **[与上游的差异](docs/UPSTREAM-DIFF.md)**。
+先确认「设置 → 系统 → 通知」已开启（专注助手 / 免打扰也会拦通知）。应用在检测到通知未送达时，
+会尝试自动创建所需的开始菜单快捷方式兜底，但最终能否弹出仍取决于系统通知设置。
 
-概览：
-
-- **登录**：新增内嵌 Chromium 登录与本机浏览器 Cookie 自动导入（上游为 WebView 提取），登出彻底清除 Cookie
-
-- **系统集成**：Windows 原生托盘右键菜单（亮暗跟随系统配色）、通知中心下载进度、原生文件对话框、下载目录经 Known Folder API 解析
-
-- **桌面体验**：剪贴板分享链接检测、解析历史与收藏、窗口内弹窗覆盖层、启动闪屏与窗口淡入淡出
-
-- **保活**：「锁屏后保持下载」改为「下载时阻止电脑休眠」
-
-- **存储与分发**：Room → `sqlite-jdbc`、SharedPreferences → `java.util.prefs`、SAF → 普通路径；jlink + jpackage + 自研启动器 + Inno Setup，版本号单一来源 `version.txt`
-
-- **已移除**：电池优化引导、壁纸动态取色、应用图标切换、APK 更新检测、崩溃独立进程
+</details>
 
 ## 支持开发
-
-如果觉得本项目对你有帮助，欢迎通过以下方式支持：
 
 - **GitHub Star**：给 [tidain/YunX-Desktop](https://github.com/tidain/YunX-Desktop) 点个 Star ⭐
 
 - **提交 Issues**：发现 Bug 或有功能建议欢迎反馈
 
-- **赞赏**：应用内「支持开发」页面可扫码赞赏原安卓项目作者（CYQawa）与桌面移植作者（tidain），赞赏码可点击放大
+- **赞赏**：应用内「支持开发」页面可扫码赞赏原安卓项目作者（CYQawa）与桌面移植作者（tidain）
 
-## 免责声明
+## 文档
 
-1. **项目性质**：本项目（含上游 [CYQawa/YunX](https://github.com/CYQawa/YunX)）仅供个人学习、研究与
-   技术交流使用，属于非商业性质的开源项目，不提供任何形式的官方技术支持与担保。
-2. **禁止商用**：本项目完全免费开源，**任何形式的收费下载、倒卖均属欺诈**。若您付费购买到了本项目，
-   请立即退款并向对应平台举报。
-3. **内容版权**：本项目本身不存储、不上传、不分发任何受版权保护的文件，仅对用户自行提供的
-   网盘分享链接进行解析与下载。通过本项目下载的任何内容，其版权归原作者（及权利人）所有；
-   请在下载后 **24 小时内删除**，因未删除引发的版权纠纷与本项目无关。
-4. **平台风险**：本项目与夸克、UC、迅雷、百度、139、123 云盘等平台无任何关联或合作。
-   解析能力基于公开接口的抓包分析整理，可能随平台调整而失效；使用第三方工具访问平台
-   存在账号被风控、限制或封禁的风险（尤其百度网盘），由此产生的后果由使用者自行承担。
-5. **合规使用**：使用者应遵守所在国家/地区的法律法规以及各网盘平台的用户协议，
-   不得将本项目用于任何违法违规用途（包括但不限于下载、传播侵权或违禁内容），
-   违规使用的全部法律责任由使用者本人承担。
-6. **无担保声明**：本项目按「现状」提供，不附带任何明示或默示的担保（包括但不限于
-   适销性、特定用途适用性与不侵权的默示担保）。因使用或无法使用本项目导致的任何
-   直接或间接损失（含数据丢失、账号损失、设备问题等），作者与贡献者不承担责任。
-7. **接受即同意**：一旦下载、安装或使用本项目，即表示您已阅读、理解并同意上述全部条款。
-   如不同意，请立即停止使用并删除本项目。
+| 文档                              | 内容                             |
+| ------------------------------- | ------------------------------ |
+| [功能清单](docs/FEATURES.md)        | 全部功能与细节                        |
+| [使用说明](docs/USAGE.md)           | 快速上手、登录方式、设置项、数据目录、托盘操作        |
+| [构建与打包](docs/BUILD.md)          | 环境要求、命令、版本号、打包产物、目录结构          |
+| [与上游的差异](docs/UPSTREAM-DIFF.md) | 桌面版相对上游 Android 版的新增 / 重做 / 移除 |
+| [免责声明](docs/DISCLAIMER.md)      | 免责声明、协议逆向说明、反倒卖、开源协议           |
 
 ## 开源协议
 
-本项目基于上游 [CYQawa/YunX](https://github.com/CYQawa/YunX) 移植，同样以 [GNU AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html) 协议开源，详见根目录 [LICENSE](LICENSE)。
-
-## 关于协议逆向
-
-部分网盘平台的解析基于抓包分析与开源项目（如 alist）的协议研究整理，接口可能随官方调整而失效，请以实际运行结果为准。
+本项目基于上游 [CYQawa/YunX](https://github.com/CYQawa/YunX) 移植，同样以
+[GNU AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html) 协议开源，详见 [LICENSE](LICENSE)。
+完整的免责与合规说明见 **[免责声明](docs/DISCLAIMER.md)**。
 
 ## 更多
 
@@ -176,7 +173,7 @@ cd YunX-Desktop
 
 - PC 移植版仓库：<https://github.com/tidain/YunX-Desktop>
 
-- 如果在使用中有任何问题或建议，欢迎提交 [Issue](https://github.com/tidain/YunX-Desktop/issues)。
+- 问题与建议：<https://github.com/tidain/YunX-Desktop/issues>
 
 ## Star History
 

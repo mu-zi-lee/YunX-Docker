@@ -10,7 +10,7 @@ import java.time.LocalDateTime
  */
 object Log {
 
-    private val logFile: File = File(AppContext.filesDir, "yunx-pc.log")
+    private val logFile: File = File(AppContext.filesDir, "yunx-desktop.log")
 
     fun i(tag: String, msg: String) = write("I", tag, msg)
     fun d(tag: String, msg: String) = write("D", tag, msg)

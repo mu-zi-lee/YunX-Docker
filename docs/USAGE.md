@@ -32,12 +32,15 @@
 
 | 路径 | 内容 |
 | --- | --- |
-| `%USERPROFILE%\.yunx-pc\` | 应用数据根目录（可用环境变量 `YUNX_PC_DATA_DIR` 覆盖） |
-| `%USERPROFILE%\.yunx-pc\yunx.db` | 任务与凭证库（SQLite） |
-| `%USERPROFILE%\.yunx-pc\credential.key` | 凭证加密密钥 |
-| `%USERPROFILE%\.yunx-pc\cache\download_tmp\` | 下载分片临时目录 |
-| `%USERPROFILE%\.yunx-pc\files\yunx-pc.log` | 运行日志（设置页可导出） |
+| `%USERPROFILE%\.yunx-desktop\` | 应用数据根目录（可用环境变量 `YUNX_DESKTOP_DATA_DIR` 覆盖） |
+| `%USERPROFILE%\.yunx-desktop\yunx.db` | 任务与凭证库（SQLite） |
+| `%USERPROFILE%\.yunx-desktop\credential.key` | 凭证加密密钥 |
+| `%USERPROFILE%\.yunx-desktop\cache\download_tmp\` | 下载分片临时目录 |
+| `%USERPROFILE%\.yunx-desktop\files\yunx-desktop.log` | 运行日志（设置页可导出） |
 | 注册表 `HKEY_CURRENT_USER\Software\JavaSoft\Prefs\yunx` | 偏好设置 |
+
+> 旧版本使用的 `%USERPROFILE%\.yunx-pc\` 会在首次启动时**自动整体迁移**为 `.yunx-desktop`
+> （登录态、下载任务、分片一并保留），无需手动处理。
 
 ## 托盘与窗口
 

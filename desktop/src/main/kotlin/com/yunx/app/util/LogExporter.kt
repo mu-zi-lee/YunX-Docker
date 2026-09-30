@@ -9,7 +9,7 @@ import java.util.Locale
 
 /**
  * 桌面版日志导出工具：
- * 将运行日志（<dataDir>/files/yunx-pc.log）快照导出为带时间戳的文本文件。
+ * 将运行日志（<dataDir>/files/yunx-desktop.log）快照导出为带时间戳的文本文件。
  */
 object LogExporter {
 
@@ -30,7 +30,7 @@ object LogExporter {
         }
         FileOutputStream(target).use { out ->
             out.write(header.toByteArray(Charsets.UTF_8))
-            val logFile = File(AppContext.filesDir, "yunx-pc.log")
+            val logFile = File(AppContext.filesDir, "yunx-desktop.log")
             if (logFile.exists()) {
                 logFile.inputStream().use { it.copyTo(out) }
             } else {
@@ -45,7 +45,7 @@ object LogExporter {
         val dir = DesktopActions.defaultDownloadDir
         if (!dir.exists()) dir.mkdirs()
         val target = File(dir, "yunx_log_${timestamp()}.txt")
-        val logFile = File(AppContext.filesDir, "yunx-pc.log")
+        val logFile = File(AppContext.filesDir, "yunx-desktop.log")
         val header = "YunX PC 日志导出 ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())}\n"
         FileOutputStream(target).use { out ->
             out.write(header.toByteArray(Charsets.UTF_8))
@@ -60,7 +60,7 @@ object LogExporter {
 
     /** 清空运行日志（桌面版仅截断本地日志文件） */
     fun clearLog(): Boolean = runCatching {
-        val logFile = File(AppContext.filesDir, "yunx-pc.log")
+        val logFile = File(AppContext.filesDir, "yunx-desktop.log")
         if (logFile.exists()) logFile.writeText("")
         true
     }.getOrDefault(false)

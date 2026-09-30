@@ -75,7 +75,7 @@
 | 数据库 | Room | 纯 JDBC（`sqlite-jdbc`）直连 SQLite |
 | 设置存储 | SharedPreferences | `java.util.prefs`，落在注册表 `HKEY_CURRENT_USER\Software\JavaSoft\Prefs\yunx` |
 | 文件存储 | SAF / tree Uri | 普通文件路径（下载目录等） |
-| 数据目录 | 应用私有目录 | `%USERPROFILE%\.yunx-pc\`：`yunx.db`、`credential.key`、`cache/download_tmp`、`files/yunx-pc.log` |
+| 数据目录 | 应用私有目录 | `%USERPROFILE%\.yunx-desktop\`：`yunx.db`、`credential.key`、`cache/download_tmp`、`files/yunx-desktop.log`（旧版 `.yunx-pc` 首次启动自动迁移） |
 | 认证备份 | 有 | 同思路：PBKDF2 派生密钥 + AES-GCM 加密 Cookie / JWT，导出 `.yunx` 备份文件，可跨设备恢复 |
 
 ## 7. 构建与分发

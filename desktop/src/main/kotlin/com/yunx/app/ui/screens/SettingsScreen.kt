@@ -19,7 +19,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.Backup
+import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Info
@@ -30,6 +32,7 @@ import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Power
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Restore
+import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.Tune
@@ -70,6 +73,8 @@ import com.yunx.app.data.backup.AuthBackupManager
 import com.yunx.app.data.backup.AuthCrypto
 import com.yunx.app.data.download.DownloadPlatform
 import com.yunx.app.data.download.DownloadSaver
+import com.yunx.app.data.network.HttpClients
+import com.yunx.app.data.network.SystemProxy
 import com.yunx.app.data.prefs.SettingsRepository
 import com.yunx.app.data.update.UpdateChecker
 import com.yunx.app.ui.SnackbarController
@@ -138,6 +143,20 @@ fun SettingsScreen(
     var showConcurrencyDialog by remember { mutableStateOf(false) }
     var showSpeedDialog by remember { mutableStateOf(false) }
     var showRetryDialog by remember { mutableStateOf(false) }
+    // GitHub 下载镜像前缀：null/空 = 使用内置默认（UpdateChecker.MIRROR_PREFIX）
+    var githubMirror by remember { mutableStateOf(settingsRepo.githubMirrorPrefix) }
+    var showMirrorDialog by remember { mutableStateOf(false) }
+    // 网络代理：三选一模式（直连 / 系统代理 / 手动配置），本地状态驱动副标题，弹窗内使用临时变量编辑
+    var proxyMode by remember { mutableStateOf(settingsRepo.proxyMode) }
+    var proxyHost by remember { mutableStateOf(settingsRepo.proxyHost) }
+    var proxyPort by remember { mutableStateOf(settingsRepo.proxyPort.toString()) }
+    var showProxyDialog by remember { mutableStateOf(false) }
+    // HTTP/2 开关：默认关闭（仅使用 HTTP/1.1）
+    var http2Enabled by remember { mutableStateOf(settingsRepo.http2Enabled) }
+    // system 模式下展示当前实际解析到的系统代理（仅在进入该模式时读一次注册表，不随运行中变化实时刷新）
+    val systemProxyInfo = remember(proxyMode) {
+        if (proxyMode == SettingsRepository.PROXY_MODE_SYSTEM) SystemProxy.inspect() else null
+    }
     // 用户体验与系统适配：下载时阻止休眠 / 通知中心进度
     var keepAwake by remember { mutableStateOf(settingsRepo.keepAwakeWhileDownloading) }
     var showSpeed by remember { mutableStateOf(settingsRepo.notificationShowSpeed) }
@@ -315,6 +334,56 @@ fun SettingsScreen(
                     }
                 }
             }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // GitHub 下载镜像：自定义前缀，留空使用内置默认镜像
+        SettingsItem(
+            icon = Icons.Outlined.Cloud,
+            title = "GitHub 下载镜像",
+            description = githubMirror?.takeIf { it.isNotBlank() }
+                ?.let { "已自定义：$it" }
+                ?: "默认：${UpdateChecker.MIRROR_PREFIX}",
+            onClick = { showMirrorDialog = true }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // 网络代理：三选一模式（不代理 / 使用系统代理 / 手动配置）
+        SettingsItem(
+            icon = Icons.Outlined.Security,
+            title = "网络代理",
+            description = when (proxyMode) {
+                SettingsRepository.PROXY_MODE_MANUAL ->
+                    if (proxyHost.isNotBlank()) "手动配置代理：$proxyHost:$proxyPort"
+                    else "手动配置代理（未填写主机地址）"
+                SettingsRepository.PROXY_MODE_SYSTEM -> "使用系统代理：${describeSystemProxy(systemProxyInfo)}"
+                else -> "不使用代理（直连）"
+            },
+            onClick = { showProxyDialog = true }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // HTTP/2 开关：默认关闭（仅使用 HTTP/1.1），开启后允许 ALPN 协商 h2
+        SettingsItem(
+            icon = Icons.Outlined.Bolt,
+            title = "启用 HTTP/2",
+            description = if (http2Enabled) {
+                "已启用：允许协商 HTTP/2（理论上更快，实测差异通常不大）"
+            } else {
+                "默认仅使用 HTTP/1.1（HTTP/2 理论上更快，但实测差异通常不大）"
+            },
+            onClick = {
+                http2Enabled = !http2Enabled
+                settingsRepo.http2Enabled = http2Enabled
+                HttpClients.setHttp2Enabled(http2Enabled)
+                SnackbarController.show(
+                    if (http2Enabled) "已启用 HTTP/2（允许协商 h2）" else "已切换为仅使用 HTTP/1.1"
+                )
+            },
+            trailing = { Switch(checked = http2Enabled, onCheckedChange = null) }
         )
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -893,6 +962,200 @@ fun SettingsScreen(
             TextButton(onClick = { showCloseBehaviorDialog = false }) { Text("取消") }
         }
     )
+
+    // GitHub 下载镜像前缀设置弹窗（留空 = 使用内置默认镜像）
+    if (showMirrorDialog) {
+        // 弹窗内临时输入：打开时带出当前已保存的自定义前缀（无则空）
+        var mirrorInput by remember { mutableStateOf(githubMirror ?: "") }
+        FadeAlertDialog(
+            visible = true,
+            onDismissRequest = { showMirrorDialog = false },
+            title = { Text("GitHub 下载镜像") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = mirrorInput,
+                        onValueChange = { mirrorInput = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("镜像前缀 URL") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                        singleLine = true
+                    )
+                    Text(
+                        text = "留空使用默认镜像 ${UpdateChecker.MIRROR_PREFIX}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    TextButton(onClick = { mirrorInput = "" }) {
+                        Text("恢复默认")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val raw = mirrorInput.trim()
+                        if (raw.isBlank()) {
+                            // 空：恢复内置默认镜像
+                            settingsRepo.githubMirrorPrefix = null
+                            githubMirror = null
+                            showMirrorDialog = false
+                            SnackbarController.show("已恢复默认镜像")
+                        } else if (!raw.startsWith("http://") && !raw.startsWith("https://")) {
+                            // 必须是 http/https 开头，否则报错不保存
+                            SnackbarController.show("镜像前缀需以 http:// 或 https:// 开头")
+                        } else {
+                            // 规范化：统一以 / 结尾，拼接原直链时不会粘连
+                            val normalized = if (raw.endsWith("/")) raw else "$raw/"
+                            settingsRepo.githubMirrorPrefix = normalized
+                            githubMirror = normalized
+                            showMirrorDialog = false
+                            SnackbarController.show("GitHub 镜像已更新")
+                        }
+                    }
+                ) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showMirrorDialog = false }) { Text("取消") }
+            }
+        )
+    }
+
+    // 网络代理设置弹窗（三选一：不使用代理 / 使用系统代理 / 手动配置代理）
+    if (showProxyDialog) {
+        // 弹窗内临时变量：取消时不回写已保存值
+        var tempMode by remember { mutableStateOf(proxyMode) }
+        var tempHost by remember { mutableStateOf(proxyHost) }
+        var tempPort by remember { mutableStateOf(proxyPort) }
+        // 弹窗内实时预览 system 模式解析结果（切换到该选项时读一次注册表）
+        val previewInfo = remember(tempMode) {
+            if (tempMode == SettingsRepository.PROXY_MODE_SYSTEM) SystemProxy.inspect() else null
+        }
+        FadeAlertDialog(
+            visible = true,
+            onDismissRequest = { showProxyDialog = false },
+            title = { Text("网络代理") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    ProxyModeOption(
+                        label = "不使用代理（直连）",
+                        selected = tempMode == SettingsRepository.PROXY_MODE_DIRECT,
+                        onClick = { tempMode = SettingsRepository.PROXY_MODE_DIRECT }
+                    )
+                    ProxyModeOption(
+                        label = "使用系统代理",
+                        selected = tempMode == SettingsRepository.PROXY_MODE_SYSTEM,
+                        onClick = { tempMode = SettingsRepository.PROXY_MODE_SYSTEM }
+                    )
+                    // 系统代理模式：展示实际解析结果（读 Windows 系统代理设置）
+                    if (tempMode == SettingsRepository.PROXY_MODE_SYSTEM) {
+                        Text(
+                            text = "当前系统代理：${describeSystemProxy(previewInfo)}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    ProxyModeOption(
+                        label = "手动配置代理",
+                        selected = tempMode == SettingsRepository.PROXY_MODE_MANUAL,
+                        onClick = { tempMode = SettingsRepository.PROXY_MODE_MANUAL }
+                    )
+                    // 仅手动模式才需要主机 / 端口输入
+                    if (tempMode == SettingsRepository.PROXY_MODE_MANUAL) {
+                        OutlinedTextField(
+                            value = tempHost,
+                            onValueChange = { tempHost = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("代理主机地址（如 127.0.0.1）") },
+                            singleLine = true
+                        )
+                        OutlinedTextField(
+                            value = tempPort,
+                            onValueChange = { tempPort = it.filter(Char::isDigit).take(5) },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("代理端口（如 7890）") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true
+                        )
+                    }
+                    Text(
+                        text = "代理用于加速 GitHub 等海外资源；不使用代理时所有请求直连。" +
+                            "系统代理取自 Windows 系统设置，仅在启动或切换设置时读取一次。" +
+                            "（暂不支持 PAC 脚本与绕过列表）",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        when (tempMode) {
+                            SettingsRepository.PROXY_MODE_MANUAL -> {
+                                val host = tempHost.trim()
+                                val port = tempPort.toIntOrNull()
+                                when {
+                                    // 校验失败仅提示，不关闭弹窗
+                                    host.isBlank() ->
+                                        SnackbarController.show("请填写代理主机地址")
+                                    port == null || port !in 1..65535 ->
+                                        SnackbarController.show("代理端口需为 1-65535 之间的数字")
+                                    else -> {
+                                        settingsRepo.proxyMode = SettingsRepository.PROXY_MODE_MANUAL
+                                        settingsRepo.proxyHost = host
+                                        settingsRepo.proxyPort = port
+                                        HttpClients.setProxy(host, port)
+                                        proxyMode = SettingsRepository.PROXY_MODE_MANUAL
+                                        proxyHost = host
+                                        proxyPort = port.toString()
+                                        showProxyDialog = false
+                                        SnackbarController.show("已启用代理：$host:$port")
+                                    }
+                                }
+                            }
+                            SettingsRepository.PROXY_MODE_SYSTEM -> {
+                                settingsRepo.proxyMode = SettingsRepository.PROXY_MODE_SYSTEM
+                                proxyMode = SettingsRepository.PROXY_MODE_SYSTEM
+                                when (val info = SystemProxy.inspect()) {
+                                    is SystemProxy.Inspect.Proxy -> {
+                                        HttpClients.setProxy(info.host, info.port)
+                                        SnackbarController.show("已使用系统代理：${info.host}:${info.port}")
+                                    }
+                                    SystemProxy.Inspect.PacUnsupported -> {
+                                        HttpClients.setProxy(null, 0)
+                                        SnackbarController.show("检测到 PAC 脚本，暂不支持，已按直连处理")
+                                    }
+                                    else -> {
+                                        HttpClients.setProxy(null, 0)
+                                        SnackbarController.show("未检测到系统代理，已按直连处理")
+                                    }
+                                }
+                                showProxyDialog = false
+                            }
+                            else -> {
+                                settingsRepo.proxyMode = SettingsRepository.PROXY_MODE_DIRECT
+                                HttpClients.setProxy(null, 0)
+                                proxyMode = SettingsRepository.PROXY_MODE_DIRECT
+                                showProxyDialog = false
+                                SnackbarController.show("已切换为不使用代理（直连）")
+                            }
+                        }
+                    }
+                ) { Text("确定") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showProxyDialog = false }) { Text("取消") }
+            }
+        )
+    }
+}
+
+/** system 模式解析结果的简明文案（用于副标题与弹窗预览） */
+private fun describeSystemProxy(info: SystemProxy.Inspect?): String = when (info) {
+    is SystemProxy.Inspect.Proxy -> "${info.host}:${info.port}"
+    SystemProxy.Inspect.PacUnsupported -> "检测到 PAC 脚本，暂不支持，按直连处理"
+    SystemProxy.Inspect.Unavailable -> "当前平台不支持，按直连处理"
+    else -> "未检测到系统代理，按直连处理"
 }
 
 /** 导出网盘认证弹窗：AES 加密密码 + 导出范围（仅已登录 / 全部绑定） */
@@ -1101,6 +1364,19 @@ private fun SettingsItem(
                 )
             }
         }
+    }
+}
+
+/** 代理模式单选行（三选一） */
+@Composable
+private fun ProxyModeOption(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(label, style = MaterialTheme.typography.bodyMedium)
     }
 }
 

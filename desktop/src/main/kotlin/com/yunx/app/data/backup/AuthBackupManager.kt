@@ -12,6 +12,7 @@ import com.yunx.app.data.db.UCAccountDao
 import com.yunx.app.data.db.UCAccountEntity
 import com.yunx.app.data.db.XunleiAccountDao
 import com.yunx.app.data.db.XunleiAccountEntity
+import com.yunx.app.data.network.GitHubTokenStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -120,6 +121,16 @@ class AuthBackupManager(
             .put("version", VERSION)
             .put("exportedAt", System.currentTimeMillis())
             .put("accounts", accounts)
+            .let { root ->
+                // GitHub Token 单独顶层字段（它是单个标量凭证，存加密偏好而非 Room，与网盘账号结构不同）。
+                // 仅在已配置 Token 时导出；明文 token 仅存在于导出 JSON 内，最终由 AuthCrypto 口令加密保护，
+                // 不落盘到其他位置、不打印日志。
+                // 注意：runCatching 返回 Result，必须先 getOrNull() 解包出 String? 才能 ?.takeIf（否则 it 是 Result 类型编译失败）
+                runCatching { GitHubTokenStore.getToken() }.getOrNull()
+                    ?.takeIf { !it.isNullOrBlank() && (!onlyLoggedIn || GitHubTokenStore.hasToken()) }
+                    ?.let { root.put("githubToken", it) }
+                root
+            }
             .toString(2)
     }
 
@@ -221,6 +232,15 @@ class AuthBackupManager(
                         ); count++
                     }
                 }
+            }
+        }
+        // GitHub Token：顶层字段恢复。单独 runCatching 包住，失败不阻断其余账号导入；
+        // 旧备份无该字段时 optString 返回空串，跳过——**不清除**设备上现有 Token（避免导入旧备份误清）。
+        runCatching {
+            val ghToken = root.optString("githubToken", "")
+            if (ghToken.isNotBlank()) {
+                GitHubTokenStore.setToken(ghToken)
+                count++
             }
         }
         count

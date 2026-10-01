@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -13,7 +14,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.SystemUpdate
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -22,19 +22,25 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.mikepenz.markdown.m3.Markdown
+import com.yunx.app.data.prefs.SettingsRepository
 import com.yunx.app.data.update.UpdateChecker
+import com.yunx.app.ui.components.FadeAlertDialog
+import com.yunx.app.ui.components.GitHubMarkdownImageTransformer
+import com.yunx.app.ui.theme.compactMarkdownTypography
 
 /**
- * 发现新版本弹窗（Material3）：
- * 标题 + 当前/最新版本 + 更新说明（可滚动）+ 下载更新 / 稍后 / 忽略本次。
+ * 发现新版本弹窗：标题 + 当前/最新版本 + 更新说明（Markdown 渲染、可滚动限高）+ 下载更新 / 稍后 / 忽略本次。
  *
  * 桌面版同时提供「安装版(.exe)」和「便携版(.zip)」两个下载入口，
  * 由用户按需选择；若某个类型在 Release 中不存在，则不显示对应按钮。
+ *
+ * 弹窗走窗口内覆盖层（[FadeAlertDialog]），不创建原生窗口。
  */
 @Composable
 fun UpdateDialog(
@@ -49,7 +55,15 @@ fun UpdateDialog(
 ) {
     val exeAsset = release.assets.firstOrNull { it.name.endsWith(".exe", true) }
     val zipAsset = release.assets.firstOrNull { it.name.endsWith(".zip", true) }
-    AlertDialog(
+    // 说明里的图片复用 README 的自研加载器（无 Coil，可走设置的镜像加速）
+    GitHubMarkdownImageTransformer.mirrorPrefix = remember {
+        SettingsRepository().githubMirrorPrefix?.ifBlank { null }
+    }
+    // 紧凑字号：与 README 共用同一份排版（见 ui/theme/Type.kt）
+    val noteTypography = remember { compactMarkdownTypography() }
+
+    FadeAlertDialog(
+        visible = true,
         onDismissRequest = onLater,
         icon = {
             Surface(
@@ -102,26 +116,24 @@ fun UpdateDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(modifier = Modifier.height(6.dp))
-                // 更新说明（可滚动，防止长文本撑爆弹窗）
+                // 更新说明：走 Markdown 渲染（可滚动 + 限高，长说明不撑爆弹窗）
                 Surface(
                     shape = MaterialTheme.shapes.medium,
                     color = MaterialTheme.colorScheme.surfaceContainerLow
                 ) {
-                    Text(
-                        text = release.body.ifBlank { "暂无更新说明" },
+                    Markdown(
+                        content = release.body.ifBlank { "暂无更新说明" },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(160.dp)
+                            .heightIn(max = 220.dp)
                             .verticalScroll(rememberScrollState())
                             .padding(12.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        lineHeight = 20.sp
+                        typography = noteTypography,
+                        imageTransformer = GitHubMarkdownImageTransformer
                     )
                 }
-            }
-        },
-        confirmButton = {
-            Column(horizontalAlignment = Alignment.End) {
+                Spacer(modifier = Modifier.height(16.dp))
+                // 下载入口（安装版 / 便携版，各自可选镜像站）
                 if (exeAsset != null) {
                     Button(
                         onClick = { onDownloadAsset(exeAsset.downloadUrl, exeAsset.name) },
@@ -188,14 +200,14 @@ fun UpdateDialog(
                 }
             }
         },
+        confirmButton = {
+            TextButton(onClick = onLater) {
+                Text("稍后")
+            }
+        },
         dismissButton = {
-            Row {
-                TextButton(onClick = onIgnore) {
-                    Text("忽略本次", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                TextButton(onClick = onLater) {
-                    Text("稍后")
-                }
+            TextButton(onClick = onIgnore) {
+                Text("忽略本次", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     )

@@ -44,6 +44,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -115,6 +116,16 @@ fun ShareDetailScreen(
     onBack: () -> Unit,
     /** 打开链接历史弹窗（与输入页共用，挂载在父层 ResolveScreen） */
     onShowHistory: () -> Unit = {},
+    /** 顶部额外内容（标题/面包屑之后）：GitHub 用于显示「forked from」 */
+    extraHeaderContent: @Composable (() -> Unit)? = null,
+    /** 列表底部额外内容（items 之后）：GitHub 用于显示 README */
+    extraFooterContent: @Composable (() -> Unit)? = null,
+    /** 文件行徽章（文件名旁）：GitHub 用于 Releases 最新/预发布/草稿、账号 repo Fork/语言 */
+    fileBadge: @Composable ((ShareFile) -> Unit)? = null,
+    /** 下拉刷新回调（仅 GitHub 平台传入）；null 时不启用下拉刷新，非 GitHub 平台行为不变 */
+    onRefresh: (() -> Unit)? = null,
+    /** 是否正在刷新（下拉刷新指示器状态） */
+    refreshing: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val pathNames = viewModel.pathNames
@@ -140,6 +151,8 @@ fun ShareDetailScreen(
     // 文件列表滚动状态（返回顶部按钮用）
     val listState = rememberLazyListState()
     // 多选模式：底部批量操作栏 + 处理中弹窗
+    // 内容抽成 lambda：仅 GitHub 平台包 PullToRefreshBox 下拉刷新，非 GitHub 路径原样渲染
+    val listContent: @Composable () -> Unit = {
     Box(modifier = modifier.fillMaxSize()) {
         LazyColumn(
             state = listState,
@@ -216,6 +229,11 @@ fun ShareDetailScreen(
                             onNavigate = { viewModel.navigateToLevel(it) }
                         )
                     }
+                    // 顶部额外内容（GitHub：forked from 等）
+                    extraHeaderContent?.let { header ->
+                        Spacer(modifier = Modifier.height(6.dp))
+                        header()
+                    }
                 }
             }
 
@@ -265,8 +283,16 @@ fun ShareDetailScreen(
                         null
                     },
                     selected = viewModel.selected.contains(file),
-                    showCheckbox = viewModel.multiSelectMode
+                    showCheckbox = viewModel.multiSelectMode,
+                    badge = fileBadge?.let { b -> { b(file) } }
                 )
+            }
+
+            // 列表底部额外内容（GitHub：README）
+            extraFooterContent?.let { footer ->
+                item(key = "extra_footer") {
+                    footer()
+                }
             }
         }
 
@@ -309,6 +335,20 @@ fun ShareDetailScreen(
                 }
             )
         }
+    }
+    }
+
+    // 仅传入 onRefresh（GitHub 平台）时启用下拉刷新；否则原样渲染内容
+    if (onRefresh != null) {
+        PullToRefreshBox(
+            isRefreshing = refreshing,
+            onRefresh = onRefresh,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            listContent()
+        }
+    } else {
+        listContent()
     }
 
     // 百度 >300MB 限速提示弹窗（解析页百度分享下载，可勾选不再显示）
@@ -542,6 +582,8 @@ internal fun ShareFileRow(
     selected: Boolean = false,
     /** 是否显示行首复选框（仅多选模式列表传 true；移动/转存等选择器不显示） */
     showCheckbox: Boolean = false,
+    /** 文件徽章（文件名旁；GitHub Releases 最新/预发布/草稿、账号 repo Fork/语言） */
+    badge: @Composable (() -> Unit)? = null,
     /** 列表项动画等（调用方传入 Modifier.animateItem()） */
     modifier: Modifier = Modifier
 ) {
@@ -600,13 +642,19 @@ internal fun ShareFileRow(
             }
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
-                // 文件名过长时滚动播放显示
-                Text(
-                    text = file.fname,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
-                )
+                // 文件名 + 徽章（同一行；文件名过长时滚动播放）
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = file.fname,
+                        style = MaterialTheme.typography.bodyLarge,
+                        maxLines = 1,
+                        modifier = Modifier.basicMarquee(iterations = Int.MAX_VALUE)
+                    )
+                    if (badge != null) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        badge()
+                    }
+                }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = if (file.isdir) "文件夹" else formatSize(file.fsize),

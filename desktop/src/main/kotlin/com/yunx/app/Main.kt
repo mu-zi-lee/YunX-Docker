@@ -37,6 +37,35 @@ fun main(args: Array<String>) {
 
     // 桌面上下文初始化（数据目录等）
     AppContext.init()
+    // HTTP 代理装配：按用户设置的三选一模式注入全局 OkHttp 客户端。
+    // 必须在 application { } 之前、AppContext.init() 之后执行（此时 Preferences 已可用，
+    // 且早于任何网络请求发出，代理即时对 API / 下载 / 更新检查全部生效）。
+    // 注意：system 模式只在启动（及设置变更）时读一次系统代理，运行中系统代理变化不自动跟随。
+    runCatching {
+        val settings = com.yunx.app.data.prefs.SettingsRepository()
+        when (settings.proxyMode) {
+            com.yunx.app.data.prefs.SettingsRepository.PROXY_MODE_MANUAL -> {
+                if (settings.proxyHost.isNotBlank()) {
+                    com.yunx.app.data.network.HttpClients.setProxy(settings.proxyHost, settings.proxyPort)
+                } else {
+                    com.yunx.app.util.Log.w("YunX-Proxy", "手动代理模式未填写主机地址，按直连处理")
+                    com.yunx.app.data.network.HttpClients.setProxy(null, 0)
+                }
+            }
+            com.yunx.app.data.prefs.SettingsRepository.PROXY_MODE_SYSTEM -> {
+                // 解析系统代理；解析不到（未启用 / PAC / 读取失败）时按直连处理（SystemProxy 内部已记日志）
+                when (val info = com.yunx.app.data.network.SystemProxy.inspect()) {
+                    is com.yunx.app.data.network.SystemProxy.Inspect.Proxy ->
+                        com.yunx.app.data.network.HttpClients.setProxy(info.host, info.port)
+                    else -> com.yunx.app.data.network.HttpClients.setProxy(null, 0)
+                }
+            }
+            else -> com.yunx.app.data.network.HttpClients.setProxy(null, 0)
+        }
+        // HTTP/2 开关：默认关闭（仅 HTTP/1.1），开启后允许 ALPN 协商 h2。
+        // 与代理同一时机装配，早于任何网络请求发出，启动即生效。
+        com.yunx.app.data.network.HttpClients.setHttp2Enabled(settings.http2Enabled)
+    }
     // 原生暗色模式：让 Win32 原生菜单（托盘右键）跟随系统暗色。必须在创建任何窗口前调用。
     DarkMode.enable()
     // 迅雷设备指纹（进程启动时初始化一次，等价原 Application.onCreate）

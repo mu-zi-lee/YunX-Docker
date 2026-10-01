@@ -167,10 +167,13 @@ fun BookmarkScreen(
             onConfirm = { link, title, category, pwd ->
                 showAddDialog = false
                 val parsed = ShareLinkParser.parse(link)
+                // GitHub 链接 ShareLinkParser 不识别，单独取平台标签
+                val platform = parsed?.platform?.name
+                    ?: if (com.yunx.app.data.network.GitHubLinkParser.parse(link) != null) "GITHUB" else ""
                 viewModel.addBookmark(
                     link = link,
                     title = title,
-                    platform = parsed?.platform?.name.orEmpty(),
+                    platform = platform,
                     pwd = pwd.ifBlank { parsed?.pwd.orEmpty() },
                     category = category
                 )
@@ -649,5 +652,6 @@ internal fun bookmarkPlatformLabel(platform: String): String = when (platform) {
     "BAIDU" -> "百度网盘"
     "C139" -> "139网盘"
     "PAN123" -> "123云盘"
+    "GITHUB" -> "GitHub"
     else -> "网盘"
 }

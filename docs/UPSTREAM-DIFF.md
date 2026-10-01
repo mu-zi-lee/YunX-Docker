@@ -17,6 +17,7 @@
 | 已有浏览器会话 | 无 | **一键导入本机浏览器 Cookie**：扫描 Chrome / Edge / Firefox / 360 / QQ 等，用 Windows DPAPI 解密（Chrome / Edge 较新版本受「应用绑定加密」限制可能读不到，Firefox / 360 等始终可用） |
 | 兜底方式 | 手动粘贴 Cookie| 与上游相同       |
 | 123 云盘 | 账号密码换 JWT | 同上游（纯 HTTP 表单登录） |
+| GitHub Token | Android Keystore 加密存储 | AES-GCM 加密存储，密钥为本地密钥文件 `credential.key`（非 Android Keystore）；仅用于提升 API 限额 |
 | 登出 | 清除 WebView 的 Cookie | 通过 CEF 的 `delete` 标志清除该平台全部 Cookie，避免残留 |
 
 ## 2. 下载进度与保活
@@ -77,6 +78,7 @@
 | 文件存储 | SAF / tree Uri | 普通文件路径（下载目录等） |
 | 数据目录 | 应用私有目录 | `%USERPROFILE%\.yunx-desktop\`：`yunx.db`、`credential.key`、`cache/download_tmp`、`files/yunx-desktop.log`（旧版 `.yunx-pc` 首次启动自动迁移） |
 | 认证备份 | 有 | 同思路：PBKDF2 派生密钥 + AES-GCM 加密 Cookie / JWT，导出 `.yunx` 备份文件，可跨设备恢复 |
+| README / 更新说明图片渲染 | Android `BitmapFactory` 解码（`inSampleSize` 降采样） | GFM Markdown 渲染，图片改用 Skia（skiko）解码，无降采样 |
 
 ## 7. 构建与分发
 

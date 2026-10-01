@@ -55,22 +55,28 @@
 
 - 123 云盘
 
+- GitHub（仓库 / 账号 / 文件直链）
+
 > \[!WARNING]
 > **不建议使用百度网盘，可能导致账号被风控！**
 
 ## 功能
 
-- **分享链接解析** —— 识别 6 家网盘分享链接，自动匹配提取码
+- **分享链接解析** —— 识别夸克 / UC / 迅雷 / 百度 / 139 / 123 分享链接并自动匹配提取码，另支持 GitHub 仓库 / 账号 / 文件直链
 
 - **高速下载** —— Range 分片并发 + 断点续传 + 失败自动重试 + 全局限速
 
+- **GitHub 浏览与 README 渲染** —— 浏览仓库文件树 / Releases / 账号仓库列表，README 与更新说明以 GFM Markdown 渲染（支持镜像加速）
+
 - **通知中心进度** —— 下载进度实时显示为 Windows 通知中心 toast 进度条（多任务聚合 + 实时速度）
 
-- **多种登录方式** —— 内嵌 Chromium 登录 / 一键导入本机浏览器 Cookie / 手动粘贴 Cookie
+- **多种登录方式** —— 内嵌 Chromium 登录 / 一键导入本机浏览器 Cookie / 手动粘贴 Cookie；GitHub 可选 Personal Access Token
 
 - **Windows 系统集成** —— 原生托盘菜单（亮暗跟随系统配色）、原生文件对话框、剪贴板分享链接检测
 
 - **桌面体验** —— 深色模式 + 自定义种子色、链接收藏、解析历史、窗口内弹窗覆盖层
+
+- **网络** —— GitHub 下载镜像前缀、HTTP 代理（便于加速或直连受限的场景）
 
 完整功能清单见 **[功能清单](docs/FEATURES.md)**。
 
@@ -81,15 +87,16 @@
 
 ## 技术栈
 
-| 分类    | 选型                                         |
-| ----- | ------------------------------------------ |
-| 语言    | Kotlin                                     |
-| UI    | Compose Multiplatform（Desktop）+ Material 3 |
-| 持久化   | `sqlite-jdbc`（SQLite）+ `java.util.prefs`   |
-| 网络    | OkHttp 4.12.0（请求 + 分片下载）                   |
-| 内嵌浏览器 | JCEF 132（Chromium）                         |
-| 原生桥接  | JNA（Win32 API）+ 自编 `darkmode.dll`          |
-| 构建分发  | Gradle + jlink + jpackage + Inno Setup     |
+| 分类          | 选型                                                 |
+| ----------- | -------------------------------------------------- |
+| 语言          | Kotlin                                             |
+| UI          | Compose Multiplatform（Desktop）+ Material 3         |
+| 持久化         | `sqlite-jdbc`（SQLite）+ `java.util.prefs`           |
+| 网络          | OkHttp 4.12.0（请求 + 分片下载）                           |
+| 内嵌浏览器       | JCEF 132（Chromium）                                 |
+| 原生桥接        | JNA（Win32 API）+ 自编 `darkmode.dll`                  |
+| 构建分发        | Gradle + jlink + jpackage + Inno Setup             |
+| Markdown 渲染 | multiplatform-markdown-renderer（GFM：README / 更新说明） |
 
 ## 使用
 

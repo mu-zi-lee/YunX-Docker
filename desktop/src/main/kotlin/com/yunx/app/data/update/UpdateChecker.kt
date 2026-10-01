@@ -19,8 +19,8 @@ object UpdateChecker {
     /** GitHub 下载加速镜像站前缀（国内直连 GitHub 慢/失败时的兜底下载通道） */
     const val MIRROR_PREFIX = "https://cdn.gh-proxy.org/"
 
-    /** 把 GitHub release 直链转成镜像站直链：https://cdn.gh-proxy.org/<原直链> */
-    fun mirrorUrl(url: String): String = MIRROR_PREFIX + url
+    /** 把 GitHub release 直链转成镜像站直链：<prefix><原直链>；默认使用内置镜像前缀 */
+    fun mirrorUrl(url: String, prefix: String = MIRROR_PREFIX): String = prefix + url
 
     data class Asset(
         val name: String,

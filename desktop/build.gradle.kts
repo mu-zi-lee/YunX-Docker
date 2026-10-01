@@ -27,6 +27,11 @@ dependencies {
     // 主题种子色（material-color-utilities 无公开仓库坐标；从 material 1.14.0 AAR 解包 classes.jar 本地引入）
     implementation(files("libs/material-color-utilities-1.0.0.jar"))
 
+    // GFM Markdown 渲染（README / 更新说明）。注意：必须停留在 0.33.x ——
+    // 0.34.0 起改用 Compose 1.8+ 的 BasicText 签名（含 TextAutoSize），与项目锁定的
+    // Compose Multiplatform 1.7.3 二进制不兼容，会在运行时抛 NoSuchMethodError
+    implementation("com.mikepenz:multiplatform-markdown-renderer-m3:0.33.0")
+
     // 方案 A：一键导入浏览器 Cookie（DPAPI 解密 Chromium 系浏览器的加密 Cookie）
     implementation("net.java.dev.jna:jna:5.14.0")
     implementation("net.java.dev.jna:jna-platform:5.14.0")

@@ -135,6 +135,71 @@ class SettingsRepository {
             prefs.putLong("theme_seed_color", value)
         }
 
+    /**
+     * 自定义 GitHub 下载镜像前缀（如 "https://gh.dpik.top/"）。
+     * null/空字符串表示使用内置默认镜像（UpdateChecker.MIRROR_PREFIX）。
+     */
+    var githubMirrorPrefix: String?
+        get() = prefs.get("github_mirror_prefix", null)
+        set(value) {
+            if (value.isNullOrBlank()) prefs.remove("github_mirror_prefix") else prefs.put("github_mirror_prefix", value)
+        }
+
+    /**
+     * 代理模式：三选一（直连 / 系统代理 / 手动配置）。
+     * 兼容旧值：`proxy_mode` 尚未写入时按旧的 `proxy_enabled` 迁移一次
+     * （true → manual，false → direct），迁移后写入 `proxy_mode`。
+     */
+    var proxyMode: String
+        get() {
+            val saved = prefs.get("proxy_mode", null)
+            if (saved != null) return normalizeProxyMode(saved)
+            val migrated =
+                if (prefs.getBoolean("proxy_enabled", false)) PROXY_MODE_MANUAL else PROXY_MODE_DIRECT
+            prefs.put("proxy_mode", migrated)
+            return migrated
+        }
+        set(value) {
+            prefs.put("proxy_mode", normalizeProxyMode(value))
+        }
+
+    /** 是否启用 HTTP 代理（旧键，仅用于 [proxyMode] 的兼容迁移，新逻辑不再写入） */
+    var proxyEnabled: Boolean
+        get() = prefs.getBoolean("proxy_enabled", false)
+        set(value) {
+            prefs.putBoolean("proxy_enabled", value)
+        }
+
+    /** 代理主机地址（如 "127.0.0.1"），空串表示未配置；仅 [PROXY_MODE_MANUAL] 使用 */
+    var proxyHost: String
+        get() = prefs.get("proxy_host", "") ?: ""
+        set(value) {
+            prefs.put("proxy_host", value)
+        }
+
+    /** 代理端口（默认 7890，范围 1-65535）；仅 [PROXY_MODE_MANUAL] 使用 */
+    var proxyPort: Int
+        get() = prefs.getInt("proxy_port", DEFAULT_PROXY_PORT)
+        set(value) {
+            prefs.putInt("proxy_port", value.coerceIn(1, 65535))
+        }
+
+    /**
+     * 是否启用 HTTP/2（默认 false：仅使用 HTTP/1.1；开启后允许 ALPN 协商到 h2）。
+     * HTTP/2 理论上更快，但实测差异通常不大，故默认关闭。
+     */
+    var http2Enabled: Boolean
+        get() = prefs.getBoolean("http2_enabled", false)
+        set(value) {
+            prefs.putBoolean("http2_enabled", value)
+        }
+
+    /** 归一化代理模式：非法值一律回退为直连 */
+    private fun normalizeProxyMode(value: String): String = when (value) {
+        PROXY_MODE_SYSTEM, PROXY_MODE_MANUAL -> value
+        else -> PROXY_MODE_DIRECT
+    }
+
     companion object {
         /** 关闭行为：每次询问 */
         const val CLOSE_BEHAVIOR_ASK = "ask"
@@ -143,11 +208,19 @@ class SettingsRepository {
         /** 关闭行为：最小化到系统托盘 */
         const val CLOSE_BEHAVIOR_TRAY = "tray"
 
+        /** 代理模式：不使用代理（直连） */
+        const val PROXY_MODE_DIRECT = "direct"
+        /** 代理模式：使用系统代理（读 Windows 系统代理设置） */
+        const val PROXY_MODE_SYSTEM = "system"
+        /** 代理模式：手动配置代理（主机 + 端口） */
+        const val PROXY_MODE_MANUAL = "manual"
+
         const val DEFAULT_DOWNLOAD_THREADS = 32
         const val MAX_DOWNLOAD_THREADS = 512
         const val XUNLEI_DOWNLOAD_THREADS = 8
         const val DEFAULT_MAX_CONCURRENT_DOWNLOADS = 1
         const val DEFAULT_DOWNLOAD_RETRY_COUNT = 3
+        const val DEFAULT_PROXY_PORT = 7890
 
         /** 默认主题种子色：Material Blue（与内置默认方案一致） */
         const val DEFAULT_SEED_COLOR = 0xFF415F91L

@@ -8,6 +8,7 @@ import androidx.compose.ui.text.FontRasterizationSettings
 import androidx.compose.ui.text.FontSmoothing
 import androidx.compose.ui.text.ParagraphStyle
 import androidx.compose.ui.text.PlatformParagraphStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -126,3 +127,35 @@ val Typography = crispAll(Typography(
     )
     )
 )
+
+/**
+ * 紧凑 Markdown 排版：对齐 GitHub 桌面端观感（正文 14sp、标题逐级收紧、行距 1.35 倍）。
+ * 供 GitHub 仓库 README 的 m3 Markdown 渲染复用（见 ui/components/GitHubMarkdownImageTransformer.kt）。
+ * 调用方用 `remember { compactMarkdownTypography() }` 包一层即可。
+ */
+fun compactMarkdownTypography() = run {
+    fun body(size: Int, bold: Boolean = false) = TextStyle(
+        fontSize = size.sp,
+        lineHeight = (size * 1.35f).toInt().sp,
+        fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal
+    )
+    com.mikepenz.markdown.model.DefaultMarkdownTypography(
+        text = body(14),
+        code = body(13),
+        inlineCode = body(13),
+        h1 = body(20, true),
+        h2 = body(18, true),
+        h3 = body(16, true),
+        h4 = body(15, true),
+        h5 = body(14, true),
+        h6 = body(14, true),
+        quote = body(13),
+        paragraph = body(14),
+        ordered = body(14),
+        bullet = body(14),
+        list = body(14),
+        link = body(14),
+        textLink = TextLinkStyles(),
+        table = body(13)
+    )
+}

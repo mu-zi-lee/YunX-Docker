@@ -4,6 +4,8 @@ import okhttp3.ConnectionPool
 import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.util.concurrent.TimeUnit
 
 /**
@@ -11,6 +13,7 @@ import java.util.concurrent.TimeUnit
  * - [apiClient]：平台 API（登录/解析/直链）、HLS 下载、更新检查共用，超时宽松；
  * - [downloadClient]：分片下载专用，大 Dispatcher 保障分片并发（默认实例 maxRequestsPerHost=5 会锁死并发）。
  * 所有构建都使用系统证书链和 OkHttp 主机名校验，不提供进程内绕过开关。
+ * 所有客户端共用同一 HTTP 协议开关（默认仅 HTTP/1.1）。
  */
 object HttpClients {
 
@@ -21,6 +24,59 @@ object HttpClients {
 
     @Volatile
     private var downloadCache: OkHttpClient? = null
+
+    /** 当前生效的 HTTP 代理主机；null 表示直连 */
+    @Volatile
+    private var proxyHost: String? = null
+
+    /** 当前生效的 HTTP 代理端口；0 表示直连 */
+    @Volatile
+    private var proxyPort: Int = 0
+
+    /** 是否启用 HTTP/2；false（默认）时所有客户端仅使用 HTTP/1.1 */
+    @Volatile
+    private var http2Enabled: Boolean = false
+
+    /**
+     * 配置全局 HTTP 代理。host 为 null 或 port 不在 1-65535 时视为不使用代理（直连）。
+     * 调用后清空已构建的客户端缓存，使下次获取时按新代理重建，立即生效。
+     * 本对象不持有外部状态，仅依赖 java.net 标准库与 OkHttp 内置代理支持。
+     */
+    fun setProxy(host: String?, port: Int) {
+        synchronized(lock) {
+            proxyHost = host
+            proxyPort = port
+            // 使既有客户端失效：下次 apiClient()/downloadClient() 时重建，代理立即生效
+            apiCache = null
+            downloadCache = null
+        }
+    }
+
+    /**
+     * 配置是否启用 HTTP/2。默认关闭：所有客户端仅协商 HTTP/1.1；
+     * 开启后允许 ALPN 协商到 h2（理论上更快，实测差异通常不大）。
+     * 调用后清空已构建的客户端缓存，使下次获取时按新协议重建，立即生效。
+     */
+    fun setHttp2Enabled(enabled: Boolean) {
+        synchronized(lock) {
+            http2Enabled = enabled
+            // 使既有客户端失效：下次 apiClient()/downloadClient() 时重建，协议立即生效
+            apiCache = null
+            downloadCache = null
+        }
+    }
+
+    /** 按开关决定 ALPN 协商协议：关闭时仅 HTTP/1.1，开启时允许 h2 */
+    private fun currentProtocols(): List<Protocol> =
+        if (http2Enabled) listOf(Protocol.HTTP_2, Protocol.HTTP_1_1)
+        else listOf(Protocol.HTTP_1_1)
+
+    /** 构建代理实例；仅在代理主机与端口均有效时返回非 null，否则返回 null（直连） */
+    private fun currentProxy(): Proxy? {
+        val host = proxyHost ?: return null
+        if (proxyPort !in 1..65535) return null
+        return Proxy(Proxy.Type.HTTP, InetSocketAddress(host, proxyPort))
+    }
 
     /** 普通 API 客户端（各平台 API、HLS、更新检查） */
     fun apiClient(): OkHttpClient {
@@ -47,6 +103,11 @@ object HttpClients {
             .writeTimeout(30, TimeUnit.SECONDS)
             .callTimeout(45, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
+            .protocols(currentProtocols())
+            .apply {
+                // 配置了有效代理时注入；否则保持默认直连，行为与改动前完全一致
+                currentProxy()?.let { proxy -> proxy(proxy) }
+            }
             .build()
     }
 
@@ -64,11 +125,15 @@ object HttpClients {
                     timeUnit = TimeUnit.MINUTES
                 )
             )
-            .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
+            .protocols(currentProtocols())
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
+            .apply {
+                // 配置了有效代理时注入；否则保持默认直连，行为与改动前完全一致
+                currentProxy()?.let { proxy -> proxy(proxy) }
+            }
             .build()
     }
 }

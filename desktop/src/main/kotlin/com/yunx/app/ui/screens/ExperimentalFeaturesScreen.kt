@@ -1,0 +1,394 @@
+package com.yunx.app.ui.screens
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material.icons.outlined.Bookmarks
+import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.yunx.app.data.download.DownloadTuning
+import com.yunx.app.data.network.HttpClients
+import com.yunx.app.data.prefs.SettingsRepository
+import com.yunx.app.ui.BackHandler
+import com.yunx.app.ui.SnackbarController
+import com.yunx.app.ui.components.FadeAlertDialog
+import com.yunx.app.ui.rememberGlobalSnackbarHostState
+
+/** 读缓冲可选档位（KB） */
+private val bufferKbOptions = listOf(16, 32, 64, 128, 256)
+
+/** 慢连接判定阈值可选档位（KB/s） */
+private val preemptMinBpsKbOptions = listOf(4, 8, 12, 16, 32, 64, 128, 256)
+
+/** 慢连接判定时长可选档位（秒） */
+private val preemptMinAgeSecOptions = listOf(5, 10, 15, 20, 30, 45, 60)
+
+/**
+ * 「实验性功能」二级页：集中管理高风险 / 可调下载参数，支持一键重置为默认值。
+ *
+ * 本页参数会影响下载行为，改动后对新任务生效；异常时点底部「重置为默认值」恢复。
+ * 二级页导航沿用项目现有方式（MainScreen 的全屏覆盖层 + showXxx 状态），未引入新导航框架。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ExperimentalFeaturesScreen(
+    onBack: () -> Unit,
+    /** 主页快捷方式开关变化回调（MainScreen 持有解析页所需状态） */
+    onHomeShortcutChanged: (Boolean) -> Unit = {},
+    modifier: Modifier = Modifier
+) {
+    BackHandler { onBack() }
+    val settingsRepo = remember { SettingsRepository() }
+    // 本地状态驱动 UI，改动同时同步 Preferences 与运行时（DownloadTuning / HttpClients）
+    var http2Enabled by remember { mutableStateOf(settingsRepo.http2Enabled) }
+    var bufferSize by remember { mutableStateOf(settingsRepo.downloadBufferSize) }
+    var preemptEnabled by remember { mutableStateOf(settingsRepo.slowPreemptEnabled) }
+    var preemptMinBps by remember { mutableStateOf(settingsRepo.slowPreemptMinBps) }
+    var preemptMinAgeMs by remember { mutableStateOf(settingsRepo.slowPreemptMinAgeMs) }
+    var homeShortcut by remember { mutableStateOf(settingsRepo.homeShortcutEnabled) }
+
+    var showBufferDialog by remember { mutableStateOf(false) }
+    var showMinBpsDialog by remember { mutableStateOf(false) }
+    var showMinAgeDialog by remember { mutableStateOf(false) }
+    var showResetConfirm by remember { mutableStateOf(false) }
+
+    val snackbarHostState = rememberGlobalSnackbarHostState()
+
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        topBar = {
+            TopAppBar(
+                title = { Text("实验性功能", style = MaterialTheme.typography.titleLarge) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                )
+            )
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 16.dp)
+        ) {
+            // 顶部说明
+            Text(
+                text = "以下参数会影响下载行为，改动后对新任务生效；若出现异常，可点底部「重置为默认值」恢复。",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // HTTP/2 开关（从「网络」分组移动至此，逻辑不变）
+            SettingsItem(
+                icon = Icons.Outlined.Bolt,
+                title = "启用 HTTP/2",
+                description = if (http2Enabled) {
+                    "已启用：允许协商 HTTP/2（理论上更快，实测差异通常不大）"
+                } else {
+                    "默认仅使用 HTTP/1.1（HTTP/2 理论上更快，但实测差异通常不大）"
+                },
+                onClick = {
+                    http2Enabled = !http2Enabled
+                    settingsRepo.http2Enabled = http2Enabled
+                    HttpClients.setHttp2Enabled(http2Enabled)
+                    SnackbarController.show(
+                        if (http2Enabled) "已启用 HTTP/2（允许协商 h2）" else "已切换为仅使用 HTTP/1.1"
+                    )
+                },
+                trailing = { Switch(checked = http2Enabled, onCheckedChange = null) }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 读缓冲大小
+            SettingsItem(
+                icon = Icons.Outlined.Layers,
+                title = "下载读缓冲大小",
+                description = "当前 ${bufferSize / 1024} KB（影响每个在飞分片的内存占用；新任务生效）",
+                onClick = { showBufferDialog = true }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 慢连接抢占开关
+            SettingsItem(
+                icon = Icons.Outlined.Speed,
+                title = "慢连接抢占",
+                description = if (preemptEnabled) {
+                    "已开启：把远低于同伴的慢分片换新连接续传（阈值 ${preemptMinBps / 1024} KB/s、判定 ${preemptMinAgeMs / 1000} 秒）"
+                } else {
+                    "已关闭：不做慢连接抢占（等价于该功能引入之前的行为）"
+                },
+                onClick = {
+                    preemptEnabled = !preemptEnabled
+                    settingsRepo.slowPreemptEnabled = preemptEnabled
+                    DownloadTuning.applyFrom(settingsRepo)
+                    SnackbarController.show(if (preemptEnabled) "已开启慢连接抢占" else "已关闭慢连接抢占")
+                },
+                trailing = { Switch(checked = preemptEnabled, onCheckedChange = null) }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 慢连接判定阈值
+            SettingsItem(
+                icon = Icons.Outlined.Tune,
+                title = "慢连接判定阈值",
+                description = "当前 ${preemptMinBps / 1024} KB/s（低于此速率的连接才判定为慢，4–256 KB/s）",
+                onClick = { showMinBpsDialog = true }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 慢连接判定时长
+            SettingsItem(
+                icon = Icons.Outlined.Refresh,
+                title = "慢连接判定时长",
+                description = "当前 ${preemptMinAgeMs / 1000} 秒（分片至少跑这么久才允许被抢占，5–60 秒）",
+                onClick = { showMinAgeDialog = true }
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // 主页快捷方式
+            SettingsItem(
+                icon = Icons.Outlined.Bookmarks,
+                title = "主页快捷方式",
+                description = if (homeShortcut) {
+                    "已开启：解析页以横向快捷方式展示收藏，点击直达解析"
+                } else {
+                    "默认关闭：解析页不显示收藏快捷方式"
+                },
+                onClick = {
+                    homeShortcut = !homeShortcut
+                    settingsRepo.homeShortcutEnabled = homeShortcut
+                    onHomeShortcutChanged(homeShortcut)
+                    SnackbarController.show(if (homeShortcut) "已开启主页快捷方式" else "已关闭主页快捷方式")
+                },
+                trailing = { Switch(checked = homeShortcut, onCheckedChange = null) }
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // 底部重置按钮：二次确认后恢复本页全部默认值
+            Button(
+                onClick = { showResetConfirm = true },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+            ) {
+                Text("重置为默认值")
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "默认值：HTTP/2 关闭、读缓冲 64 KB、慢连接抢占开启（12 KB/s · 15 秒）、主页快捷方式关闭。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+
+    // 读缓冲档位选择
+    FadeAlertDialog(
+        visible = showBufferDialog,
+        onDismissRequest = { showBufferDialog = false },
+        title = { Text("下载读缓冲大小") },
+        text = {
+            Column {
+                Text(
+                    text = "缓冲越大单路吞吐略高、内存占用越高；默认 64 KB。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                bufferKbOptions.forEach { kb ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = bufferSize == kb * 1024,
+                            onClick = {
+                                val bytes = kb * 1024
+                                bufferSize = bytes
+                                settingsRepo.downloadBufferSize = bytes
+                                DownloadTuning.applyFrom(settingsRepo)
+                                showBufferDialog = false
+                                SnackbarController.show("读缓冲已设为 $kb KB（新任务生效）")
+                            }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("$kb KB", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { showBufferDialog = false }) { Text("取消") }
+        }
+    )
+
+    // 慢连接判定阈值选择
+    FadeAlertDialog(
+        visible = showMinBpsDialog,
+        onDismissRequest = { showMinBpsDialog = false },
+        title = { Text("慢连接判定阈值") },
+        text = {
+            Column {
+                Text(
+                    text = "低于该速率的在飞分片才可能被换连接（实际阈值取本值与任务平均单连接速度一半的较大者）。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                preemptMinBpsKbOptions.forEach { kb ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = preemptMinBps == kb * 1024L,
+                            onClick = {
+                                val bps = kb * 1024L
+                                preemptMinBps = bps
+                                settingsRepo.slowPreemptMinBps = bps
+                                DownloadTuning.applyFrom(settingsRepo)
+                                showMinBpsDialog = false
+                                SnackbarController.show("慢连接判定阈值已设为 $kb KB/s")
+                            }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("$kb KB/s", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { showMinBpsDialog = false }) { Text("取消") }
+        }
+    )
+
+    // 慢连接判定时长选择
+    FadeAlertDialog(
+        visible = showMinAgeDialog,
+        onDismissRequest = { showMinAgeDialog = false },
+        title = { Text("慢连接判定时长") },
+        text = {
+            Column {
+                Text(
+                    text = "分片至少跑这么久才允许被抢占（避开建连与爬坡期，避免误杀刚起步的正常分片）。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                preemptMinAgeSecOptions.forEach { sec ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = preemptMinAgeMs == sec * 1000L,
+                            onClick = {
+                                val ms = sec * 1000L
+                                preemptMinAgeMs = ms
+                                settingsRepo.slowPreemptMinAgeMs = ms
+                                DownloadTuning.applyFrom(settingsRepo)
+                                showMinAgeDialog = false
+                                SnackbarController.show("慢连接判定时长已设为 $sec 秒")
+                            }
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("$sec 秒", style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { showMinAgeDialog = false }) { Text("取消") }
+        }
+    )
+
+    // 重置二次确认（窗口内覆盖层，遵循项目既有弹窗约定）
+    FadeAlertDialog(
+        visible = showResetConfirm,
+        onDismissRequest = { showResetConfirm = false },
+        title = { Text("重置实验性功能？") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "将把本页所有设置恢复为默认值：",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = "· HTTP/2：关闭\n" +
+                        "· 读缓冲：64 KB\n" +
+                        "· 慢连接抢占：开启（12 KB/s · 15 秒）\n" +
+                        "· 主页快捷方式：关闭",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    showResetConfirm = false
+                    // 1) 持久化恢复默认
+                    settingsRepo.resetExperimentalFeatures()
+                    // 2) 运行时同步：HTTP/2 客户端重建 + 下载引擎调优参数
+                    HttpClients.setHttp2Enabled(settingsRepo.http2Enabled)
+                    DownloadTuning.applyFrom(settingsRepo)
+                    // 3) UI 本地状态与主页快捷方式状态同步
+                    http2Enabled = settingsRepo.http2Enabled
+                    bufferSize = settingsRepo.downloadBufferSize
+                    preemptEnabled = settingsRepo.slowPreemptEnabled
+                    preemptMinBps = settingsRepo.slowPreemptMinBps
+                    preemptMinAgeMs = settingsRepo.slowPreemptMinAgeMs
+                    homeShortcut = settingsRepo.homeShortcutEnabled
+                    onHomeShortcutChanged(settingsRepo.homeShortcutEnabled)
+                    SnackbarController.show("已重置为默认值")
+                }
+            ) { Text("重置") }
+        },
+        dismissButton = {
+            TextButton(onClick = { showResetConfirm = false }) { Text("取消") }
+        }
+    )
+}

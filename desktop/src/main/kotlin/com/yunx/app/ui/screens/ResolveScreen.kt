@@ -11,6 +11,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +25,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -55,13 +58,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.mikepenz.markdown.m3.Markdown
+import com.yunx.app.data.db.BookmarkEntity
 import com.yunx.app.data.network.GitHubLinkParser
 import com.yunx.app.data.network.ShareLinkParser
 import com.yunx.app.data.network.SharePlatform
@@ -102,6 +109,12 @@ fun ResolveScreen(
     ucCloudViewModel: UCCoudViewModel,
     /** 123 云盘浏览 ViewModel（123 分享转存目录选择用） */
     pan123CloudViewModel: Pan123CloudViewModel,
+    /** 实验性功能：主页快捷方式开关（默认关闭；关闭时不显示快捷区域，主页保持现状） */
+    homeShortcutsEnabled: Boolean = false,
+    /** 主页快捷方式数据源（复用收藏仓库的收藏列表，不新造存储） */
+    homeShortcuts: List<BookmarkEntity> = emptyList(),
+    /** 打开「收藏网盘链接」页管理收藏 */
+    onManageShortcuts: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val state = viewModel.uiState
@@ -302,7 +315,22 @@ fun ResolveScreen(
                         pwdEdited = false
                     },
                     onClearPwd = { pwd = "" },
-                    onShowHistory = { showHistory = true }
+                    onShowHistory = { showHistory = true },
+                    // 主页快捷方式（实验性功能，默认关闭）：点击收藏直达解析
+                    showShortcuts = homeShortcutsEnabled,
+                    shortcuts = homeShortcuts,
+                    onOpenShortcut = { bookmark ->
+                        link = bookmark.link
+                        pwd = bookmark.pwd
+                        pwdEdited = true
+                        val gh = GitHubLinkParser.parse(bookmark.link)
+                        if (gh != null) {
+                            viewModel.startGitHubResolve(gh)
+                        } else {
+                            viewModel.startResolve(bookmark.link, bookmark.pwd.takeIf { it.isNotBlank() })
+                        }
+                    },
+                    onManageShortcuts = onManageShortcuts
                 )
             }
         }
@@ -417,7 +445,15 @@ private fun ResolveInputContent(
     onPwdChange: (String) -> Unit,
     onClearLink: () -> Unit,
     onClearPwd: () -> Unit,
-    onShowHistory: () -> Unit
+    onShowHistory: () -> Unit,
+    /** 是否显示主页快捷方式区域（实验性功能开关，默认关闭） */
+    showShortcuts: Boolean,
+    /** 主页快捷方式数据（收藏列表） */
+    shortcuts: List<BookmarkEntity>,
+    /** 点击快捷方式：直接解析该收藏链接 */
+    onOpenShortcut: (BookmarkEntity) -> Unit,
+    /** 打开收藏页管理快捷方式 */
+    onManageShortcuts: () -> Unit
 ) {
     val isLoading = state is ResolveUiState.Loading
 
@@ -534,6 +570,108 @@ private fun ResolveInputContent(
                 }
             }
         }
+
+        // 主页快捷方式（实验性功能）：收藏以横向快捷方式展示，点击直达解析；关闭时不渲染
+        if (showShortcuts) {
+            HomeShortcutsSection(
+                bookmarks = shortcuts,
+                onOpen = onOpenShortcut,
+                onManage = onManageShortcuts
+            )
+        }
+    }
+}
+
+/** 平台枚举名 → 快捷色块的简称（2 字左右，网格/横向瓦片用） */
+private fun shortcutPlatformLabel(platform: String): String = when (platform) {
+    "QUARK" -> "夸克"
+    "UC" -> "UC"
+    "XUNLEI" -> "迅雷"
+    "BAIDU" -> "百度"
+    "C139" -> "139"
+    "PAN123" -> "123"
+    "GITHUB" -> "GitHub"
+    else -> "链接"
+}
+
+/**
+ * 主页快捷方式区块：解析页输入态下方，已收藏的网盘 / GitHub 条目以横向快捷方式展示，点击直达解析。
+ * 仅在「设置 → 实验性功能 → 主页快捷方式」开启时渲染（默认关闭 → 主页保持现状）。
+ */
+@Composable
+private fun HomeShortcutsSection(
+    bookmarks: List<BookmarkEntity>,
+    onOpen: (BookmarkEntity) -> Unit,
+    onManage: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "快捷方式",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onManage) { Text("管理") }
+        }
+        if (bookmarks.isEmpty()) {
+            Text(
+                text = "还没有收藏；在「收藏网盘链接」页添加后即可在主页一键解析。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else {
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(bookmarks, key = { it.id }) { bookmark ->
+                    HomeShortcutTile(bookmark = bookmark, onClick = { onOpen(bookmark) })
+                }
+            }
+        }
+    }
+}
+
+/** 主页快捷方式单个瓦片：圆角色块（平台简称）+ 标题，点击直达解析 */
+@Composable
+private fun HomeShortcutTile(
+    bookmark: BookmarkEntity,
+    onClick: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .width(84.dp)
+            .clip(MaterialTheme.shapes.medium)
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(MaterialTheme.colorScheme.primaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = shortcutPlatformLabel(bookmark.platform),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(
+            text = bookmark.title.ifBlank { bookmark.link },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 

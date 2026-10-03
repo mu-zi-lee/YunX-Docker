@@ -17,6 +17,9 @@ import java.util.concurrent.TimeUnit
  */
 object HttpClients {
 
+    /** 下载客户端排队 Call 上限：分片下载走同步 call.execute()，真实并发受 DownloadManager 的在飞上限约束 */
+    private const val MAX_QUEUED_CALLS = 64
+
     private val lock = Any()
 
     @Volatile
@@ -113,15 +116,18 @@ object HttpClients {
 
     private fun buildDownload(): OkHttpClient {
         val dispatcher = Dispatcher().apply {
-            maxRequests = 512
-            maxRequestsPerHost = 512 // 与设置页线程数上限（512）对齐，不锁死并发
+            // 排队 Call 上限：分片下载走同步 call.execute()，根本不经过这个队列 —— 真实并发由
+            // DownloadManager 的 inflightLimiter 与 chunkIoDispatcher 决定
+            maxRequests = MAX_QUEUED_CALLS
+            maxRequestsPerHost = MAX_QUEUED_CALLS
         }
         return OkHttpClient.Builder()
             .dispatcher(dispatcher)
+            // 空闲连接池收紧：默认 128 条 × 5 分钟会常驻 socket，下载是突发式，1 分钟足够复用
             .connectionPool(
                 ConnectionPool(
-                    maxIdleConnections = 128,
-                    keepAliveDuration = 5,
+                    maxIdleConnections = 8,
+                    keepAliveDuration = 1,
                     timeUnit = TimeUnit.MINUTES
                 )
             )

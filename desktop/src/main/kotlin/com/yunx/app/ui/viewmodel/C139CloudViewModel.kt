@@ -390,7 +390,7 @@ class C139CloudViewModel(
         }
     }
 
-    /** 创建分享（139 提取码系统自动生成，仅选有效期） */
+    /** 创建分享（139 提取码系统自动生成，仅选有效期；桌面版自带弹窗，period 为**天数**：null=永久 1/7/30=天数） */
     fun shareFile(period: Int?) {
         val file = actionFile ?: return
         viewModelScope.launch {
@@ -495,7 +495,7 @@ class C139CloudViewModel(
         }
     }
 
-    /** 批量分享 */
+    /** 批量分享（period 为天数，语义见 [shareFile]） */
     fun shareSelected(period: Int?) {
         val files = _selected.toList()
         if (files.isEmpty()) return

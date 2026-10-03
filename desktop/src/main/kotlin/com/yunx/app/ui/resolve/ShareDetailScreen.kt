@@ -32,6 +32,7 @@ import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.InsertDriveFile
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.SaveAlt
 import androidx.compose.material3.AlertDialog
@@ -64,6 +65,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.yunx.app.ui.BackHandler
 import com.yunx.app.data.db.BookmarkEntity
+import com.yunx.app.data.network.SharePlatform
 import com.yunx.app.data.network.model.ShareFile
 import com.yunx.app.data.network.model.ShareSession
 import com.yunx.app.data.prefs.SettingsRepository
@@ -233,6 +235,11 @@ fun ShareDetailScreen(
                     extraHeaderContent?.let { header ->
                         Spacer(modifier = Modifier.height(6.dp))
                         header()
+                    }
+                    // 游客模式（未登录）：列表可用；夸克/UC 可直接下载，其余平台下载/转存需登录 —— 常驻一行说明
+                    if (viewModel.isGuest) {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        GuestBrowseNotice(viewModel.sharePlatform)
                     }
                 }
             }
@@ -461,6 +468,44 @@ fun ShareDetailScreen(
                 resolveViewModel = viewModel,
                 cloudViewModel = quarkCloudViewModel,
                 onDismiss = { viewModel.dismissSave() }
+            )
+        }
+    }
+}
+
+/**
+ * 游客模式提示条：未登录也能浏览分享列表（6 个网盘的列表接口都允许匿名）。
+ * 夸克/UC 还能直接下载（夸克约 50MB 以内的小文件、UC 不限大小），其余平台下载与 6 平台转存都要登录。
+ */
+@Composable
+private fun GuestBrowseNotice(platform: SharePlatform) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.medium,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.Info,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = when (platform) {
+                    SharePlatform.QUARK ->
+                        "未登录浏览：可直接下载约 50MB 以内的小文件；更大的文件和转存需先到「网盘」页登录"
+                    SharePlatform.UC ->
+                        "未登录浏览：可直接下载（不限大小）；转存需先到「网盘」页登录"
+                    else ->
+                        "未登录浏览：可查看文件列表，下载/转存需先到「网盘」页登录"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

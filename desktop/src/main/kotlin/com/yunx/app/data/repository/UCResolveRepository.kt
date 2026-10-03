@@ -64,8 +64,14 @@ class UCResolveRepository(private val api: UCApi) : ShareResolveRepository {
         session: ShareSession,
         file: ShareFile,
         toDirFid: String,
-        cookie: String
+        cookie: String,
+        skipSpaceCheck: Boolean
     ): Result<String> = runCatching {
+        // 转存前置空间校验：空间不足直接抛出，不再走后面的转存与轮询（避免被误报「转存超时」）；
+        // 批量入口已做过整批预算校验时跳过（避免同一批多次查配额）
+        if (!skipSpaceCheck) {
+            TransferSpaceGuard.ensureEnoughSpace(file.fsize.takeIf { it > 0 }, "UC") { api.getQuota(cookie) }
+        }
         val taskId = api.saveShareFile(
             shareId = session.shareId,
             stoken = session.stoken,
@@ -90,14 +96,20 @@ class UCResolveRepository(private val api: UCApi) : ShareResolveRepository {
         onFailure = { Result.failure(it) }
     )
 
+    /** 批量转存前的整批空间预算校验：只查一次配额，不足时抛出（UC 转存同样占用目标账号空间） */
+    override suspend fun ensureBatchSpace(sizes: List<Long>, credential: String): Boolean =
+        TransferSpaceGuard.ensureEnoughSpaceForBatch(sizes, "UC") { api.getQuota(credential) }
+
     /**
      * UC 官方下载流程：无需转存！
      * 直接用分享 fid + fid_token + stoken + pwd_id 调 download 接口取直链。
+     * skipSpaceCheck 仅用于对齐接口（UC 下载不转存、不占空间，故此处不做空间校验）。
      */
     override suspend fun getShareDownloadLink(
         session: ShareSession,
         file: ShareFile,
-        cookie: String
+        cookie: String,
+        skipSpaceCheck: Boolean
     ): Result<DownloadLink> = runCatching {
         // 视频：优先用分享态 video_preview 取**原画**直链（走播放回调 checkplay，不换片，绕过宣传片替换）
         if (isVideo(file.fname)) {
@@ -124,6 +136,26 @@ class UCResolveRepository(private val api: UCApi) : ShareResolveRepository {
             stoken = session.stoken,
             pwdId = session.shareId,
             cookie = cookie
+        ) ?: throw IllegalStateException("获取下载链接失败")
+    }.fold(
+        onSuccess = { Result.success(it) },
+        onFailure = { Result.failure(it) }
+    )
+
+    /**
+     * 游客取链（未登录）：与登录态同一条 download 接口，只是不带账号 Cookie，
+     * 由服务端下发游客态 __pugs（UC 实测大文件也放行，不做大小限制）。
+     * 视频不走 video_preview —— 那条链路依赖登录态，这里直接取普通直链。
+     */
+    override suspend fun getGuestShareDownloadLink(
+        session: ShareSession,
+        file: ShareFile
+    ): Result<DownloadLink> = runCatching {
+        api.getGuestShareDownloadLink(
+            fid = file.fid,
+            fidToken = file.fidToken,
+            stoken = session.stoken,
+            pwdId = session.shareId
         ) ?: throw IllegalStateException("获取下载链接失败")
     }.fold(
         onSuccess = { Result.success(it) },

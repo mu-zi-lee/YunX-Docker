@@ -42,6 +42,172 @@ Get-ChildItem $exportDir -File | ForEach-Object { Copy-Item $_.FullName $libs -F
 $jarCount = (Get-ChildItem $libs -File).Count
 Write-Host "libs assembled: $jarCount jars" -ForegroundColor Green
 
+# ---- [2b/5] 打包期依赖裁剪（只作用于便携包内的 jar；Gradle 编译期依赖保持不变）----
+# 目标：功能/外观/路径完全不变，只去掉运行时用不到的内容以缩减发布体积。
+# 每项都要求源 jar 存在，缺失即中止，避免产出半裁剪的不完整包。
+Write-Host ""
+Write-Host "[2b/5] Trimming bundled jars (material-icons-extended / sqlite-jdbc / skiko)..." -ForegroundColor Cyan
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+# 按“要保留的条目全名集合”重写 jar：条目名与目录结构原样保留，仅丢弃未列入的条目。
+function New-TrimmedJar {
+    param(
+        [string]$SourceJar,
+        [string]$TargetJar,
+        [System.Collections.Generic.HashSet[string]]$KeepEntryNames
+    )
+    $src = [System.IO.Compression.ZipFile]::OpenRead($SourceJar)
+    $tmp = "$TargetJar.tmp"
+    if (Test-Path $tmp) { Remove-Item $tmp -Force }
+    $fs = [System.IO.File]::Create($tmp)
+    $dst = New-Object System.IO.Compression.ZipArchive($fs, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+        foreach ($entry in $src.Entries) {
+            if (-not $KeepEntryNames.Contains($entry.FullName)) { continue }
+            $out = $dst.CreateEntry($entry.FullName, [System.IO.Compression.CompressionLevel]::Optimal)
+            $is = $entry.Open(); $os = $out.Open()
+            $is.CopyTo($os); $os.Close(); $is.Close()
+        }
+    } finally {
+        $dst.Dispose(); $fs.Dispose(); $src.Dispose()
+    }
+    Move-Item $tmp $TargetJar -Force
+}
+function Get-JarSizeMb([string]$Path) { return [math]::Round((Get-Item $Path).Length / 1MB, 2) }
+
+# ---- (1) material-icons-extended：只保留实际被引用的图标类 ----
+# 扫描便携包内所有 class（含 desktop.jar 与各依赖 jar）的常量池，收集被引用的
+# androidx/compose/material/icons/** 类名，再从完整 jar 中只抽取这些 class。
+# 编译期仍使用完整 jar（Gradle 依赖未改）；运行时用的是同一批图标类，外观不变。
+# 已被 material-icons-core 覆盖的图标（Add/Close/ArrowBack 等）不在此 jar 内，无需处理。
+$iconsJar = Get-ChildItem $libs -Filter "material-icons-extended-*.jar" | Select-Object -First 1 -ExpandProperty FullName
+if (-not $iconsJar) { throw "material-icons-extended jar not found in $libs" }
+$latin1 = [System.Text.Encoding]::GetEncoding(28591)
+$iconPrefix = "androidx/compose/material/icons/"
+$referencedIcons = New-Object 'System.Collections.Generic.HashSet[string]'
+$scanJars = @(Get-ChildItem $libs -Filter *.jar | Where-Object { $_.FullName -ne $iconsJar } | ForEach-Object { $_.FullName })
+$scanJars += (Join-Path $root "desktop\build\libs\desktop.jar")
+foreach ($jar in $scanJars) {
+    if (-not (Test-Path $jar)) { continue }
+    $z = [System.IO.Compression.ZipFile]::OpenRead($jar)
+    foreach ($e in $z.Entries) {
+        if (-not $e.FullName.EndsWith(".class")) { continue }
+        $ms = New-Object System.IO.MemoryStream
+        $s = $e.Open(); $s.CopyTo($ms); $s.Close()
+        $txt = $latin1.GetString($ms.ToArray()); $ms.Dispose()
+        $i = 0
+        while (($i = $txt.IndexOf($iconPrefix, $i)) -ge 0) {
+            $j = $i + $iconPrefix.Length
+            while ($j -lt $txt.Length) {
+                $c = $txt[$j]
+                if (($c -ge 'a' -and $c -le 'z') -or ($c -ge 'A' -and $c -le 'Z') -or
+                    ($c -ge '0' -and $c -le '9') -or $c -eq '$' -or $c -eq '_' -or $c -eq '/') { $j++ } else { break }
+            }
+            [void]$referencedIcons.Add($txt.Substring($i, $j - $i)); $i = $j
+        }
+    }
+    $z.Dispose()
+}
+$iconBefore = Get-JarSizeMb $iconsJar
+$keepIcons = New-Object 'System.Collections.Generic.HashSet[string]'
+[void]$keepIcons.Add("META-INF/MANIFEST.MF")
+$zi = [System.IO.Compression.ZipFile]::OpenRead($iconsJar)
+foreach ($e in $zi.Entries) {
+    if ($e.FullName.EndsWith(".class") -and $referencedIcons.Contains($e.FullName.Substring(0, $e.FullName.Length - 6))) {
+        [void]$keepIcons.Add($e.FullName)
+    }
+}
+$zi.Dispose()
+New-TrimmedJar -SourceJar $iconsJar -TargetJar $iconsJar -KeepEntryNames $keepIcons
+Write-Host "  material-icons-extended: $iconBefore MB -> $(Get-JarSizeMb $iconsJar) MB (kept $($keepIcons.Count - 1) icon classes of $($referencedIcons.Count) referenced)" -ForegroundColor Green
+
+# ---- (2) sqlite-jdbc：只保留 Windows x86_64 原生库 ----
+# org.sqlite 按 org/sqlite/native/<OS>/<arch>/<lib> 约定加载，目录结构保持不变。
+$sqliteJar = Get-ChildItem $libs -Filter "sqlite-jdbc-*.jar" | Select-Object -First 1 -ExpandProperty FullName
+if (-not $sqliteJar) { throw "sqlite-jdbc jar not found in $libs" }
+$nativePrefix = "org/sqlite/native/"
+$keptNativePrefix = "org/sqlite/native/Windows/x86_64/"
+$keepSqlite = New-Object 'System.Collections.Generic.HashSet[string]'
+$zs = [System.IO.Compression.ZipFile]::OpenRead($sqliteJar)
+foreach ($e in $zs.Entries) {
+    # 原生库只留 Windows/x86_64，其余平台目录整段丢弃；jar 内其它内容（class/META-INF 等）全部保留
+    if ($e.FullName.StartsWith($nativePrefix) -and -not $e.FullName.StartsWith($keptNativePrefix)) { continue }
+    [void]$keepSqlite.Add($e.FullName)
+}
+$zs.Dispose()
+$sqliteBefore = Get-JarSizeMb $sqliteJar
+New-TrimmedJar -SourceJar $sqliteJar -TargetJar $sqliteJar -KeepEntryNames $keepSqlite
+Write-Host "  sqlite-jdbc: $sqliteBefore MB -> $(Get-JarSizeMb $sqliteJar) MB (Windows/x86_64 native only)" -ForegroundColor Green
+
+# ---- (3) skiko 运行时 jar：原生库已解出到 app\，jar 本身运行时无需 ----
+# skiko 通过 skiko.library.path / java.library.path（启动器已设为 app\）直接加载
+# app\skiko-windows-x64.dll；该 jar 只在两者都缺失的兜底分支里才会被读取（见 skiko Library.findAndLoad）。
+# 故把 jar 从 app 载荷中移除不影响运行——原生库仍在 [5/5] 从 exportLibs 解出到 app\。
+$skikoRuntimeJar = Get-ChildItem $libs -Filter "skiko-awt-runtime-windows-x64-*.jar" | Select-Object -First 1
+if ($skikoRuntimeJar) {
+    $skikoJarMb = Get-JarSizeMb $skikoRuntimeJar.FullName
+    Remove-Item $skikoRuntimeJar.FullName -Force
+    Write-Host "  skiko runtime jar dropped from app payload: $($skikoRuntimeJar.Name) (-$skikoJarMb MB, native still shipped in app\)" -ForegroundColor Green
+} else {
+    throw "skiko-awt-runtime-windows-x64 jar not found in $libs"
+}
+
+# ---- [2c/5] 裁剪 JCEF 语言包（只留 en-US / en-GB / zh-CN / zh-TW）----
+# JCEF 原生包是 jar 内嵌的一个 tar.gz。CEF 在 Windows 上 locale 为空时回退 en-US；
+# 应用为中文界面，其余语言包无用。libcef.dll / jcef_helper.exe / icudtl.dat /
+# swiftshader/ / resources.pak / chrome_*.pak 等一律不动。
+Write-Host ""
+Write-Host "[2c/5] Trimming JCEF locale packs..." -ForegroundColor Cyan
+$jcefJar = Get-ChildItem $libs -Filter "jcef-natives-windows-amd64-*.jar" | Select-Object -First 1 -ExpandProperty FullName
+if (-not $jcefJar) { throw "jcef natives jar not found in $libs" }
+$jcefBefore = Get-JarSizeMb $jcefJar
+$jcefWork = Join-Path $root "build\jcef-trim"
+if (Test-Path $jcefWork) { Remove-Item $jcefWork -Recurse -Force }
+New-Item -ItemType Directory -Force -Path $jcefWork | Out-Null
+# 1) 从 jar 中取出内嵌 tar.gz
+$zj = [System.IO.Compression.ZipFile]::OpenRead($jcefJar)
+$tarEntry = $zj.Entries | Where-Object { $_.FullName.EndsWith(".tar.gz") } | Select-Object -First 1
+if (-not $tarEntry) { $zj.Dispose(); throw "embedded tar.gz not found in $jcefJar" }
+$tarName = $tarEntry.FullName
+$tarOrig = Join-Path $jcefWork "natives.tar.gz"
+[System.IO.Compression.ZipFileExtensions]::ExtractToFile($tarEntry, $tarOrig, $true)
+$zj.Dispose()
+# 2) 解包 → 删除多余 locale → 重新打包（bsdtar，Windows 10+ 自带）
+$jcefExtract = Join-Path $jcefWork "natives"
+New-Item -ItemType Directory -Force -Path $jcefExtract | Out-Null
+& tar -xzf $tarOrig -C $jcefExtract
+if ($LASTEXITCODE -ne 0) { throw "tar extract failed ($LASTEXITCODE)" }
+$keepLocales = @("en-US", "en-GB", "zh-CN", "zh-TW")
+$localeDir = Join-Path $jcefExtract "locales"
+$removedLocales = 0
+Get-ChildItem $localeDir -Filter *.pak | Where-Object { $keepLocales -notcontains $_.BaseName } | ForEach-Object {
+    Remove-Item $_.FullName -Force
+    $removedLocales++
+}
+$tarNew = Join-Path $jcefWork "natives-trimmed.tar.gz"
+& tar -czf $tarNew -C $jcefExtract .
+if ($LASTEXITCODE -ne 0) { throw "tar repack failed ($LASTEXITCODE)" }
+# 3) 用精简后的 tar.gz 替换 jar 内原条目（其余条目原样复制）
+$tmpJcef = "$jcefJar.tmp"
+if (Test-Path $tmpJcef) { Remove-Item $tmpJcef -Force }
+$inJar = [System.IO.Compression.ZipFile]::OpenRead($jcefJar)
+$ofs = [System.IO.File]::Create($tmpJcef)
+$outJar = New-Object System.IO.Compression.ZipArchive($ofs, [System.IO.Compression.ZipArchiveMode]::Create)
+foreach ($e in $inJar.Entries) {
+    $ne = $outJar.CreateEntry($e.FullName, [System.IO.Compression.CompressionLevel]::Optimal)
+    $os = $ne.Open()
+    if ($e.FullName -eq $tarName) {
+        $ns = [System.IO.File]::OpenRead($tarNew); $ns.CopyTo($os); $ns.Close()
+    } else {
+        $es = $e.Open(); $es.CopyTo($os); $es.Close()
+    }
+    $os.Close()
+}
+$outJar.Dispose(); $ofs.Dispose(); $inJar.Dispose()
+Move-Item $tmpJcef $jcefJar -Force
+Remove-Item $jcefWork -Recurse -Force -ErrorAction SilentlyContinue
+Write-Host "  jcef natives: $jcefBefore MB -> $(Get-JarSizeMb $jcefJar) MB (dropped $removedLocales locale packs)" -ForegroundColor Green
+
 Write-Host ""
 Write-Host "[3/5] Building JRE runtime image (jlink)..." -ForegroundColor Cyan
 $outDir = Join-Path $root "release\YunX-Desktop"
@@ -49,9 +215,10 @@ $runtimeTmp = Join-Path $root "release-runtime-tmp"
 # jlink 要求输出目录不存在，先清掉
 if (Test-Path $runtimeTmp) { Remove-Item $runtimeTmp -Recurse -Force }
 $jlinkExe = Join-Path $JDK "bin\jlink.exe"
+# --compress=2：对 runtime/lib/modules 做 zip 级别压缩（JDK 17 支持；JDK 21+ 才有的 zip-6 不可用）
 & $jlinkExe --module-path (Join-Path $JDK "jmods") `
   --add-modules java.base,java.datatransfer,java.xml,java.prefs,java.desktop,java.logging,jdk.crypto.ec,java.sql,java.naming `
-  --strip-debug --no-header-files --no-man-pages --output $runtimeTmp
+  --strip-debug --no-header-files --no-man-pages --compress=2 --output $runtimeTmp
 if ($LASTEXITCODE -ne 0) { throw "jlink failed with exit $LASTEXITCODE" }
 
 Write-Host ""
@@ -136,9 +303,11 @@ Write-Host "Custom launcher installed: $launcherExe" -ForegroundColor Green
 Write-Host ""
 Write-Host "[5/5] Extracting Skiko native resources (DLL/icudtl.dat) + darkmode.dll..." -ForegroundColor Cyan
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$skikoJar = Get-ChildItem $libs -Filter "skiko-awt-runtime-windows-x64*.jar" | Select-Object -First 1 -ExpandProperty FullName
-if (-not (Test-Path $skikoJar)) {
-    throw "skiko jar not found in $libs"
+# skiko 运行时 jar 已在 [2b] 从 app 载荷移除，但 exportLibs 仍保留原件：
+# 从这里解出 dll/icudtl.dat 放进 app\（原生库仍随包分发，只是不再带 .jar）。
+$skikoJar = Get-ChildItem $exportDir -Filter "skiko-awt-runtime-windows-x64*.jar" | Select-Object -First 1 -ExpandProperty FullName
+if (-not $skikoJar -or -not (Test-Path $skikoJar)) {
+    throw "skiko jar not found in $exportDir"
 }
 $zip = [System.IO.Compression.ZipFile]::OpenRead($skikoJar)
 $appDir = Join-Path $outDir "app"
@@ -155,6 +324,24 @@ $zip.Dispose()
 Copy-Item $darkModeDll $appDir -Force
 $nativeCount = (Get-ChildItem $appDir -File -Filter "*.dll").Count
 Write-Host "Copied native DLLs: $nativeCount" -ForegroundColor Green
+
+# ---- [5b/5] 清理调试残留 + 体积汇总 ----
+Write-Host ""
+Write-Host "[5b/5] Cleaning debug residue + size report..." -ForegroundColor Cyan
+$debugResidue = @(Get-ChildItem $outDir -Recurse -File -ErrorAction SilentlyContinue |
+    Where-Object { $_.Extension -in ".pdb", ".map", ".dsym" })
+if ($debugResidue.Count -gt 0) {
+    foreach ($f in $debugResidue) {
+        Write-Host "  removing debug residue: $($f.FullName)" -ForegroundColor Yellow
+        Remove-Item $f.FullName -Force
+    }
+} else {
+    Write-Host "  no *.pdb/*.map/*.dSYM residue found" -ForegroundColor Green
+}
+$appSize = [math]::Round(((Get-ChildItem $appDir -File | Measure-Object -Sum Length).Sum) / 1MB, 1)
+$runtimeSize = [math]::Round(((Get-ChildItem (Join-Path $outDir "runtime") -Recurse -File | Measure-Object -Sum Length).Sum) / 1MB, 1)
+$totalSize = [math]::Round(((Get-ChildItem $outDir -Recurse -File | Measure-Object -Sum Length).Sum) / 1MB, 1)
+Write-Host "  app\: $appSize MB   runtime\: $runtimeSize MB   total: $totalSize MB" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "Portable package ready: $outDir" -ForegroundColor Green

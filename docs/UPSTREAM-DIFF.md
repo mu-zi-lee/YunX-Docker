@@ -101,3 +101,32 @@
 - 应用图标切换
 - APK 更新检测（改为检测 GitHub Releases）
 - 崩溃独立进程
+
+## 9. 上游提交对齐记录
+
+- 上一次对齐：上游 `2e8bbb2`（GitHub 解析平台 #112/#114），桌面版提交 `7c80a9c`。
+- **本次对齐：上游 `d9d17a5`（含 `ba3bfb0`/`835b1cb`/`c4ef992`/`a84118a`/`286446c`/`dbccb09`/`d9d17a5`）。**
+
+### 9.1 已移植
+
+| 上游提交 | 内容 | 桌面实现与取舍 |
+| --- | --- | --- |
+| `ba3bfb0`（#116） | 大文件下载 OOM 修复 | 全进程在飞上限 `MAX_INFLIGHT_CHUNKS = clamp(maxHeap/8/64KB, 8, 512)` + 跨任务共享 `inflightLimiter`（主池/弹性区/失败重试三条路径统一过闸，取代旧的「每任务一个信号量」）；专用分片线程池 `chunkIoDispatcher`（core=max=上限、30s 空闲回收、daemon，不再受 `Dispatchers.IO` 的 `max(64,核数)` 限制）；**慢连接抢占**（看门狗 5s 采样，阈值 `max(12KB/s, 任务均速/2)`，15s/收尾 3s、每片最多 3 次、零退避，断连续传不丢数据）；读缓冲 256KB→64KB；下载客户端排队上限 64、空闲连接池 8×1min。**HTTP/2 桌面已是可开关（默认仅 1.1）**，无需改。桌面堆更大（jpackage 默认 1/4 物理内存，实测约 4GB → 上限夹到 512），OOM 部分按需取舍。 |
+| `835b1cb`（#123） | 更新下载应用自定义镜像前缀 + 失败回退直连 | `SettingsScreen` 的「镜像站下载更新包」改用 `SettingsRepository.githubMirrorPrefix`（未配置用内置默认），并把 GitHub 直连 URL 作为 `fallbackUrl` 传入 `DownloadManager.enqueue`；镜像主 URL 探测失败时整任务切直连（与 GitHub 浏览下载同机制）。 |
+| `c4ef992`（#126） | 未登录也可查看解析文件列表 | `ResolveViewModel.isGuest` + 6 平台列表接口匿名：百度 `errno=-6` 文案区分、夸克/UC 非 JSON 响应带 HTTP 码、迅雷 token 为空时不写 `Authorization` 并走 `panCallAnonymous`、139 去掉账号前置校验；`startResolve`/`openFolder`/`goBack`/`navigateToLevel` 空凭据照常下传；下载/转存（`fetchDownloadLink`/`downloadFiles`/`startDownload`/`saveToCloud`/`requestSave`）仍要求登录，提示统一为「…需要先登录 X（未登录仅能浏览文件列表）」；`ShareDetailScreen` 顶部新增 `GuestBrowseNotice` 常驻提示条。 |
+| `a84118a`（#127） | 修正创建分享有效期错位、统一中性码 | 新增 `model/ShareExpire`（1/2/3/4 中性码 + `daysOrNull`/`baiduPeriod`/`xunleiDays`，未知码 fail-loud）；百度 `BaiduShareResult.expiredType` 可空、ViewModel 用 `baiduPeriod` 转换并优先用服务端回填；139/123/迅雷 API 的中性码回填不再 fail-open 成「永久/30 天」。**桌面差异**：139 与 123 云盘页自带分享弹窗，有效期本就是「天数」语义（`null=永久 / 1 / 7 / 30`）且直接传给对应 API，故这两个 ViewModel 仍收天数、未改签名；只有百度走 `CloudFileSheets` 的中性码，需按上游修正。 |
+| `286446c`（#118） | 合并大文件时显示合并进度 | `DownloadStats.mergePercent`（-1=不在合并）；`ChunkDownloader.mergeChunksToStream` 新增 `onProgress`，`finishDownload` 300ms 节流上报；下载页主任务卡/子任务行/文件夹徽标显示「合并中 · n%」。桌面落盘已改为「边合并边写目标文件」，故进度按「已合并字节 / total」计算。**未同步通知栏**：桌面进度走 Windows 通知中心，合并阶段仍在 100% 后短暂显示（未额外改造 toast 文案）。 |
+| `d9d17a5`（#129） | 夸克/UC 免登录下载、设置项开关 | 夸克/UC 游客取链 `getGuestShareDownloadLink`（不转存，`__pugs` 随响应捕获进 `DownloadLink.guestCookie`）；`enqueueDownload` 识别游客直链并用游客头（UC：`GUEST_UA`+`Sec-Ch-Ua`；夸克：`API_USER_AGENT`）；`ResolveViewModel.supportsGuestDownload()` 仅夸克/UC 放行，其余平台下载仍要登录；`GuestBrowseNotice` 按平台给不同文案。设置项：新增「接受预发布版更新」开关（`SettingsRepository.acceptPrereleaseUpdate` + `UpdateChecker` 预发布通道与版本后缀比较 + 更新弹窗「预发布」标记）；「自动识别剪贴板」桌面版早有等价开关（设置页「剪贴板分享链接检测」）。 |
+
+### 9.2 跳过（Android 专属或不适用）
+
+| 上游提交/内容 | 原因 |
+| --- | --- |
+| `d99daaf`(#113)、`43537b2`(#125) | CI：Android 签名 APK 构建与发布，桌面分发走 jpackage/Inno Setup，无关。 |
+| `560d3b6`(#117)、`52f939e`(#119)、`75deabd`(#120)、`06125a8`(#124)、`d85ac95`(#128) | Android 专属：图标/自适应图标、引导页、权限检查等，桌面无对应形态。 |
+| `dbccb09`(#122) 目录选择器崩溃修复 | 桌面下载目录选择走原生 `WindowsFolderPicker`（非 Android SAF `ActivityResultLauncher`），不存在 `ActivityNotFoundException` 崩溃路径；且仪器测试依赖 AndroidX Compose test，桌面无该依赖。 |
+| `d9d17a5`(#129)「网盘更新自动化」 | 桌面更新弹窗只有「安装版(.exe)/便携版(.zip)」资产下载，**没有** Android 版 Release 说明里的「网盘更新」入口，`startUpdateDownload` 在桌面无调用方，故不涉及。 |
+| `d9d17a5`(#129)「自动识别剪贴板」开关 | 桌面版早已有等价开关与开关项（「剪贴板分享链接检测」，键 `clipboard_link_detection`）。 |
+| `d9d17a5`(#129) 更新说明改纯文本 | 桌面更新弹窗用自研 Markdown 渲染（与 README 共用），保留既有行为。 |
+| `ba3bfb0`(#116) `onTrimMemory` 释放空闲连接 / CrashHandler 内存快照 | Android 生命周期回调与崩溃上报形态，桌面无等价入口（内存高压日志已并入下载进度回调）。 |
+

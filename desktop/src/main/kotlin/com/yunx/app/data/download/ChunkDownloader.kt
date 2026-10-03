@@ -3,7 +3,6 @@ package com.yunx.app.data.download
 import com.yunx.app.util.Log
 import com.yunx.app.util.LogRedactor
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -18,6 +17,7 @@ import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.coroutineContext
 import kotlin.math.min
 
@@ -27,8 +27,16 @@ private const val TAG = "YunX-DL"
 private const val CHUNK_RETRIES = 3
 /** 当服务器忽略 Range（返回 200 整文件）时，对单分片重试 Range 的次数（指数退避后重发，CDN 负载下降后常能拿到 206） */
 private const val RANGE_RETRIES = 4
-/** 网络读缓冲：256KB */
-private const val BUFFER_SIZE = 256 * 1024
+/**
+ * 网络读缓冲的默认值：64KB（[SettingsRepository.DEFAULT_DOWNLOAD_BUFFER_SIZE] 与之一致）。
+ * 原为 256KB —— 每一路在飞分片各持一份，是「Java 堆被撑满」的主要来源之一
+ * （在飞路数上限见 DownloadManager.MAX_INFLIGHT_CHUNKS）。
+ * 网络读本身按 MTU 粒度返回，64KB 已足够摊掉 syscall 开销。
+ *
+ * 运行时实际值取自 [DownloadTuning.bufferSize]（「设置 → 实验性功能」可调），
+ * 本常量仅作为缓冲预算推导（inflightChunksFor）与合并缓冲的默认值。
+ */
+internal const val BUFFER_SIZE = 64 * 1024
 
 /**
  * 分片下载结果（结构化）：
@@ -37,6 +45,16 @@ private const val BUFFER_SIZE = 256 * 1024
  * - FAILED        : 结构性失败（非 206/200、HTML 广告页、写入字节数不足等）。
  */
 enum class ChunkResult { OK, RANGE_IGNORED, FAILED }
+
+/**
+ * ★ 慢连接抢占信号（内部使用，永不外泄）。
+ * DownloadManager 的看门狗发现某分片「已跑很久、剩余还不少、瞬时速度远低于同伴」时把 preempt 标志置位，
+ * 本层读到就主动断开当前连接（`use` 关闭响应体即取消连接），**已写字节全部保留**，
+ * 由重试循环立刻换一条新连接从 `partFile.length()` 续传。
+ *
+ * 语义是「换连接」而不是「失败」，因此不退避、不判写入不足，也不改变 ChunkResult 的对外三态。
+ */
+private class PreemptedException : IOException("慢连接抢占")
 
 /**
  * OkHttp 分片下载器：
@@ -59,14 +77,14 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
 
     // ---------- 总大小探测 ----------
 
-    suspend fun getTotalSize(url: String, headers: Map<String, String>): Long? = withContext(Dispatchers.IO) {
+    suspend fun getTotalSize(url: String, headers: Map<String, String>): Long? = withContext(DownloadManager.chunkIoDispatcher) {
         val withRange = probeSize(url, headers, withRange = true)
         if (withRange != null) return@withContext withRange
         probeSize(url, headers, withRange = false)
     }
 
     private suspend fun probeSize(url: String, headers: Map<String, String>, withRange: Boolean): Long? =
-        withContext(Dispatchers.IO) {
+        withContext(DownloadManager.chunkIoDispatcher) {
             val request = Request.Builder()
                 .url(url)
                 .apply {
@@ -106,7 +124,8 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
      * - 瞬时 IO 异常：指数退避重试（CHUNK_RETRIES）；
      * - 服务器忽略 Range（RANGE_IGNORED）：退避后重发 Range 至多 RANGE_RETRIES 次，仍被忽略则返回
      *   RANGE_IGNORED 交由 DownloadManager 回退单流整文件（**全程不下载整文件**）；
-     * - 写入后校验「已写字节 == 预期字节」，不足按失败处理（避免空洞文件 = 损坏）。
+     * - 写入后校验「已写字节 == 预期字节」，不足按失败处理（避免空洞文件 = 损坏）；
+     * - 慢连接抢占（[preempt]）：置位即断开当前连接、保留已写字节，立刻换新连接续传（见 [PreemptedException]）。
      */
     suspend fun downloadChunk(
         taskId: Long,
@@ -115,8 +134,10 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
         end: Long,
         partFile: File,
         headers: Map<String, String>,
+        /** 慢连接抢占标志（由 DownloadManager 看门狗置位）；null = 不抢占 */
+        preempt: AtomicBoolean? = null,
         onBytes: suspend (Long) -> Unit
-    ): ChunkResult = withContext(Dispatchers.IO) {
+    ): ChunkResult = withContext(DownloadManager.chunkIoDispatcher) {
         val attempts = CHUNK_RETRIES + RANGE_RETRIES
         repeat(attempts) { attempt ->
             if (!isActive) throw CancellationException("下载被取消")
@@ -127,10 +148,17 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
             // 分片已完整（含断点续传）：直接成功
             if (!unknownTotal && existing >= expected) return@withContext ChunkResult.OK
 
+            var preempted = false
             val res = try {
-                doChunkAttempt(taskId, url, from, end, unknownTotal, partFile, headers, existing, onBytes)
+                doChunkAttempt(taskId, url, from, end, unknownTotal, partFile, headers, existing, preempt, onBytes)
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: PreemptedException) {
+                // ★ 慢连接抢占：已写字节保留，下一轮从 partFile.length() 续传；零退避立即换连接
+                preempt?.set(false)
+                preempted = true
+                Log.w(TAG, "downloadChunk: task=$taskId 慢连接被抢占，换连接续传（已收 ${partFile.length()} 字节）")
+                null
             } catch (e: IOException) {
                 Log.w(TAG, "downloadChunk: task=$taskId 尝试${attempt + 1} IO异常: ${e.message}")
                 if (!isActive) throw CancellationException("下载被取消", e)
@@ -146,14 +174,15 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
                     return@withContext ChunkResult.RANGE_IGNORED
                 }
                 null -> {
-                    if (attempt < attempts - 1) delay((500L * (attempt + 1)).coerceAtMost(3000))
+                    // 抢占属于「换连接」，绝不等退避；只有真实 IO 异常才退避
+                    if (!preempted && attempt < attempts - 1) delay((500L * (attempt + 1)).coerceAtMost(3000))
                 }
             }
         }
         ChunkResult.FAILED
     }
 
-    /** 单次分片请求（不重试）：成功/忽略Range/失败 三态；IO 异常向外抛出 */
+    /** 单次分片请求（不重试）：成功/忽略Range/失败 三态；IO 异常向外抛出；被抢占抛 [PreemptedException] */
     private suspend fun doChunkAttempt(
         taskId: Long,
         url: String,
@@ -163,6 +192,7 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
         partFile: File,
         headers: Map<String, String>,
         existing: Long,
+        preempt: AtomicBoolean?,
         onBytes: suspend (Long) -> Unit
     ): ChunkResult {
         val request = Request.Builder()
@@ -172,7 +202,8 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
             .get().build()
 
         val call = client.newCall(request)
-        activeCalls.getOrPut(taskId) { newCallSet() }.add(call)
+        val callSet = activeCalls.getOrPut(taskId) { newCallSet() }
+        callSet.add(call)
         val cancelHandle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
         try {
             return call.execute().use { response ->
@@ -191,7 +222,9 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
                         val body = response.body ?: return@use ChunkResult.FAILED
                         val expected = if (unknownTotal) -1L else end - from + 1
                         // 写入分片，严格截断到预期区间
-                        val written = writeSlice(body.byteStream(), partFile, existing, expected, onBytes)
+                        val written = writeSlice(body.byteStream(), partFile, existing, expected, preempt, onBytes)
+                        // ★ 慢连接抢占：主动断开、保留已写字节（否则会被下面的「写入不足」误判为失败丢片）
+                        if (preempt?.get() == true) throw PreemptedException()
                         // ★ 校验：206 也必须写满预期字节，否则视为失败（防空洞/损坏）
                         if (!unknownTotal && written != expected) {
                             Log.w(TAG, "downloadChunk: task=$taskId 分片写入不足 written=$written 预期=$expected")
@@ -210,7 +243,9 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
                 }
             }
         } finally {
-            activeCalls[taskId]?.remove(call)
+            // ★ 只摘除当前 Call；集合空了才移除映射，避免任务完成后留下空集合常驻（原实现只在 pause/remove 时清理）
+            callSet.remove(call)
+            activeCalls.computeIfPresent(taskId) { _, set -> if (set.isEmpty()) null else set }
             cancelHandle?.dispose()
         }
     }
@@ -221,12 +256,14 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
         partFile: File,
         existing: Long,
         expected: Long,
+        preempt: AtomicBoolean?,
         onBytes: suspend (Long) -> Unit
     ): Long {
         var written = 0L
         RandomAccessFile(partFile, "rw").use { raf ->
             raf.seek(existing)
-            val buffer = ByteArray(BUFFER_SIZE)
+            // 读缓冲大小取自实验性功能设置（默认 64KB）；对新任务/新分片请求生效
+            val buffer = ByteArray(DownloadTuning.bufferSize)
             while (true) {
                 val read = input.read(buffer)
                 if (read <= 0) break
@@ -236,6 +273,8 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
                 raf.write(buffer, 0, allow.toInt())
                 written += allow
                 onBytes(allow)
+                // ★ 慢连接抢占：立即停止读取，已写字节保留（下次从 partFile.length() 续传）
+                if (preempt?.get() == true) break
                 if (expected >= 0 && written >= expected) break
             }
         }
@@ -252,7 +291,7 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
         /** 已知总大小（字节）；-1/0 = 未知，不截断（流式场景） */
         total: Long = -1L,
         onBytes: suspend (Long) -> Unit
-    ): Boolean = withContext(Dispatchers.IO) {
+    ): Boolean = withContext(DownloadManager.chunkIoDispatcher) {
         // 完整 GET 的响应从字节 0 开始，必须丢弃任何旧前缀，禁止“旧前缀 + 完整响应”拼接损坏。
         val existing = 0L
         if (partFile.exists()) RandomAccessFile(partFile, "rw").use { it.setLength(0) }
@@ -262,7 +301,8 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
             .apply { headers.forEach { (k, v) -> header(k, v) } }
             .get().build()
         val call = client.newCall(request)
-        activeCalls.getOrPut(taskId) { newCallSet() }.add(call)
+        val callSet = activeCalls.getOrPut(taskId) { newCallSet() }
+        callSet.add(call)
         val cancelHandle = coroutineContext[Job]?.invokeOnCompletion { call.cancel() }
         try {
             call.execute().use { response ->
@@ -279,7 +319,8 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
                 RandomAccessFile(partFile, "rw").use { raf ->
                     raf.seek(existing)
                     body.byteStream().use { input ->
-                        val buffer = ByteArray(BUFFER_SIZE)
+                        // 读缓冲大小取自实验性功能设置（默认 64KB）；对新任务/新分片请求生效
+                        val buffer = ByteArray(DownloadTuning.bufferSize)
                         while (true) {
                             val read = input.read(buffer)
                             if (read <= 0) break
@@ -309,7 +350,9 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
             if (!isActive) throw CancellationException("下载被取消", e)
             false
         } finally {
-            activeCalls[taskId]?.remove(call)
+            // ★ 只摘除当前 Call；集合空了才移除映射，避免任务完成后留下空集合常驻
+            callSet.remove(call)
+            activeCalls.computeIfPresent(taskId) { _, set -> if (set.isEmpty()) null else set }
             cancelHandle?.dispose()
         }
     }
@@ -324,10 +367,16 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
      * 代价（有意取舍）：合并中途失败（含用户暂停）时已写出的分片已被删除，
      * 下次恢复按磁盘真实长度重算进度并重下这部分，不会出现区间错位。
      *
+     * @param onProgress 已合并字节数回调（每写完一个分片一次）：大文件合并耗时较长，
+     *                   由调用方据此上报「合并中」进度，避免界面停在 100% 像卡死。
      * @return 实际写入的总字节数
      */
-    suspend fun mergeChunksToStream(chunkFiles: List<File>, out: OutputStream): Long =
-        withContext(Dispatchers.IO) {
+    suspend fun mergeChunksToStream(
+        chunkFiles: List<File>,
+        out: OutputStream,
+        onProgress: ((Long) -> Unit)? = null
+    ): Long =
+        withContext(DownloadManager.chunkIoDispatcher) {
             var total = 0L
             val buffer = ByteArray(BUFFER_SIZE)
             chunkFiles.forEach { part ->
@@ -344,6 +393,7 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
                 }
                 // 该片已完整写入目标，立即释放分片空间（在 use 之后，确保 fd 已关闭）
                 if (!part.delete()) Log.w(TAG, "mergeChunksToStream: 删除分片失败 $part")
+                onProgress?.invoke(total)
             }
             out.flush()
             Log.d(TAG, "mergeChunksToStream: parts=${chunkFiles.size} bytes=$total")

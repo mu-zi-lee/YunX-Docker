@@ -81,6 +81,13 @@ class SettingsRepository {
             prefs.putBoolean("clipboard_link_detection", value)
         }
 
+    /** 接受预发布版更新：检查更新时把 GitHub Pre-release 也算作新版本（默认关闭） */
+    var acceptPrereleaseUpdate: Boolean
+        get() = prefs.getBoolean("accept_prerelease_update", false)
+        set(value) {
+            prefs.putBoolean("accept_prerelease_update", value)
+        }
+
     /**
      * 关闭主窗口时的行为：
      * - "ask"：每次询问（默认）
@@ -194,6 +201,71 @@ class SettingsRepository {
             prefs.putBoolean("http2_enabled", value)
         }
 
+    /**
+     * 下载网络读缓冲大小（字节，默认 64KB）。
+     * 原为固定值 64KB（见 ChunkDownloader.BUFFER_SIZE），此处改为可在「设置 → 实验性功能」调节；
+     * 下载引擎在每次分片请求时按此值建缓冲（对新任务生效）。可选档位 16/32/64/128/256 KB。
+     */
+    var downloadBufferSize: Int
+        get() = prefs.getInt("download_buffer_size", DEFAULT_DOWNLOAD_BUFFER_SIZE)
+            .coerceIn(MIN_DOWNLOAD_BUFFER_SIZE, MAX_DOWNLOAD_BUFFER_SIZE)
+        set(value) {
+            prefs.putInt(
+                "download_buffer_size",
+                value.coerceIn(MIN_DOWNLOAD_BUFFER_SIZE, MAX_DOWNLOAD_BUFFER_SIZE)
+            )
+        }
+
+    /** 慢连接抢占开关（默认开，与现状一致；关闭后下载引擎不再把慢分片换连接） */
+    var slowPreemptEnabled: Boolean
+        get() = prefs.getBoolean("slow_preempt_enabled", DEFAULT_SLOW_PREEMPT_ENABLED)
+        set(value) {
+            prefs.putBoolean("slow_preempt_enabled", value)
+        }
+
+    /** 慢连接判定阈值（字节/秒，默认 12KB/s；范围 4–256 KB/s） */
+    var slowPreemptMinBps: Long
+        get() = prefs.getLong("slow_preempt_min_bps", DEFAULT_SLOW_PREEMPT_MIN_BPS)
+            .coerceIn(MIN_SLOW_PREEMPT_MIN_BPS, MAX_SLOW_PREEMPT_MIN_BPS)
+        set(value) {
+            prefs.putLong(
+                "slow_preempt_min_bps",
+                value.coerceIn(MIN_SLOW_PREEMPT_MIN_BPS, MAX_SLOW_PREEMPT_MIN_BPS)
+            )
+        }
+
+    /** 慢连接判定时长（毫秒，默认 15s；范围 5–60s） */
+    var slowPreemptMinAgeMs: Long
+        get() = prefs.getLong("slow_preempt_min_age_ms", DEFAULT_SLOW_PREEMPT_MIN_AGE_MS)
+            .coerceIn(MIN_SLOW_PREEMPT_MIN_AGE_MS, MAX_SLOW_PREEMPT_MIN_AGE_MS)
+        set(value) {
+            prefs.putLong(
+                "slow_preempt_min_age_ms",
+                value.coerceIn(MIN_SLOW_PREEMPT_MIN_AGE_MS, MAX_SLOW_PREEMPT_MIN_AGE_MS)
+            )
+        }
+
+    /** 主页快捷方式（默认关）：开启后在解析页以横向快捷方式展示收藏，点击直达解析 */
+    var homeShortcutEnabled: Boolean
+        get() = prefs.getBoolean("home_shortcut_enabled", false)
+        set(value) {
+            prefs.putBoolean("home_shortcut_enabled", value)
+        }
+
+    /**
+     * 重置「实验性功能」页全部设置为默认值：
+     * HTTP/2 关闭、读缓冲 64KB、慢连接抢占开启（12KB/s、15s）、主页快捷方式关闭。
+     * 运行时同步（HttpClients.setHttp2Enabled / DownloadTuning.applyFrom）由调用方负责。
+     */
+    fun resetExperimentalFeatures() {
+        http2Enabled = DEFAULT_HTTP2_ENABLED
+        downloadBufferSize = DEFAULT_DOWNLOAD_BUFFER_SIZE
+        slowPreemptEnabled = DEFAULT_SLOW_PREEMPT_ENABLED
+        slowPreemptMinBps = DEFAULT_SLOW_PREEMPT_MIN_BPS
+        slowPreemptMinAgeMs = DEFAULT_SLOW_PREEMPT_MIN_AGE_MS
+        homeShortcutEnabled = false
+    }
+
     /** 归一化代理模式：非法值一律回退为直连 */
     private fun normalizeProxyMode(value: String): String = when (value) {
         PROXY_MODE_SYSTEM, PROXY_MODE_MANUAL -> value
@@ -221,6 +293,23 @@ class SettingsRepository {
         const val DEFAULT_MAX_CONCURRENT_DOWNLOADS = 1
         const val DEFAULT_DOWNLOAD_RETRY_COUNT = 3
         const val DEFAULT_PROXY_PORT = 7890
+
+        /** HTTP/2 默认关闭（与现状一致：仅使用 HTTP/1.1） */
+        const val DEFAULT_HTTP2_ENABLED = false
+
+        /** 下载读缓冲默认 64KB（与 ChunkDownloader.BUFFER_SIZE 一致，保证默认行为不变） */
+        const val DEFAULT_DOWNLOAD_BUFFER_SIZE = 64 * 1024
+        const val MIN_DOWNLOAD_BUFFER_SIZE = 16 * 1024
+        const val MAX_DOWNLOAD_BUFFER_SIZE = 256 * 1024
+
+        /** 慢连接抢占默认开启（与现状一致），阈值 12KB/s、判定 15s */
+        const val DEFAULT_SLOW_PREEMPT_ENABLED = true
+        const val DEFAULT_SLOW_PREEMPT_MIN_BPS = 12L * 1024
+        const val MIN_SLOW_PREEMPT_MIN_BPS = 4L * 1024
+        const val MAX_SLOW_PREEMPT_MIN_BPS = 256L * 1024
+        const val DEFAULT_SLOW_PREEMPT_MIN_AGE_MS = 15_000L
+        const val MIN_SLOW_PREEMPT_MIN_AGE_MS = 5_000L
+        const val MAX_SLOW_PREEMPT_MIN_AGE_MS = 60_000L
 
         /** 默认主题种子色：Material Blue（与内置默认方案一致） */
         const val DEFAULT_SEED_COLOR = 0xFF415F91L

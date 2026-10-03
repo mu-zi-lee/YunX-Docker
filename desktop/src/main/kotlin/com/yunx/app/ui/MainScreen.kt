@@ -104,6 +104,7 @@ import com.yunx.app.ui.screens.AboutScreen
 import com.yunx.app.ui.screens.BookmarkScreen
 import com.yunx.app.ui.screens.DownloadScreen
 import com.yunx.app.ui.screens.DriveScreen
+import com.yunx.app.ui.screens.ExperimentalFeaturesScreen
 import com.yunx.app.ui.screens.OnboardingScreen
 import com.yunx.app.ui.screens.ResolveScreen
 import com.yunx.app.ui.screens.SettingsScreen
@@ -160,6 +161,7 @@ fun MainScreen(
     var showSupport by rememberSaveable { mutableStateOf(false) }
     var showTheme by rememberSaveable { mutableStateOf(false) }
     var showBookmarks by rememberSaveable { mutableStateOf(false) }
+    var showExperimental by rememberSaveable { mutableStateOf(false) }
     val saveableStateHolder = rememberSaveableStateHolder()
 
     val scope = rememberCoroutineScope()
@@ -179,6 +181,8 @@ fun MainScreen(
     val pan123Api = remember { Pan123Api() }
     val db = remember { AppDatabase.get() }
     val settings = remember { SettingsRepository() }
+    // 主页快捷方式开关（实验性功能，默认关闭）：由实验性功能页回调同步，控制解析页是否显示收藏快捷方式
+    var homeShortcutsEnabled by remember { mutableStateOf(settings.homeShortcutEnabled) }
     // 网盘页 GitHub 卡片登录态：保存/清除 Token 后即时刷新卡片文案
     var githubHasTokenState by remember { mutableStateOf(GitHubTokenStore.hasToken()) }
     // GitHub API 封装：Token 从 GitHubTokenStore 动态读取（AES-GCM 加密），仅用于提升 API 限额
@@ -415,6 +419,8 @@ fun MainScreen(
     val bookmarkViewModel: BookmarkViewModel = viewModel(
         factory = BookmarkViewModel.Factory(db.bookmarkDao())
     )
+    // 收藏列表：主页快捷方式的数据源（复用既有收藏仓库，不新造存储）
+    val bookmarks by bookmarkViewModel.bookmarks.collectAsState()
     val quarkAccount by viewModel.quarkAccount.collectAsState()
     val ucAccount by ucViewModel.ucAccount.collectAsState()
     val xunleiAccount by xunleiViewModel.xunleiAccount.collectAsState()
@@ -593,7 +599,11 @@ fun MainScreen(
                             baiduCloudViewModel,
                             c139CloudViewModel,
                             ucCloudViewModel,
-                            pan123CloudViewModel
+                            pan123CloudViewModel,
+                            // 主页快捷方式（实验性功能，默认关闭）：复用收藏仓库数据源
+                            homeShortcutsEnabled = homeShortcutsEnabled,
+                            homeShortcuts = bookmarks,
+                            onManageShortcuts = { showBookmarks = true }
                         )
                         MainTab.Drive -> DriveScreen(
                             scrollBehavior = scrollBehavior,
@@ -644,10 +654,16 @@ fun MainScreen(
                             onThemeClick = { showTheme = true },
                             onAboutClick = { showAbout = true },
                             onSupportClick = { showSupport = true },
+                            onExperimentalClick = { showExperimental = true },
                             backupManager = backupManager,
-                            onDownloadUpdateApk = { url, name ->
+                            onDownloadUpdateApk = { url, name, fallbackUrl ->
                                 scope.launch {
-                                    downloadManager.enqueue(url = url, fileName = name)
+                                    // 镜像下载传入直连作为回退：镜像主 URL 探测失败时整任务切到原始直连
+                                    downloadManager.enqueue(
+                                        url = url,
+                                        fileName = name,
+                                        fallbackUrl = fallbackUrl ?: ""
+                                    )
                                     currentTab = MainTab.Download
                                 }
                             }
@@ -728,6 +744,19 @@ fun MainScreen(
         ) {
             ThemeScreen(
                 onBack = { showTheme = false }
+            )
+        }
+
+        // 实验性功能：叠加覆盖层（二级页）
+        AnimatedVisibility(
+            visible = showExperimental,
+            enter = fadeIn(tween(220)) + scaleIn(tween(220), initialScale = 0.96f),
+            exit = fadeOut(tween(160)) + scaleOut(tween(160), targetScale = 0.96f),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            ExperimentalFeaturesScreen(
+                onBack = { showExperimental = false },
+                onHomeShortcutChanged = { homeShortcutsEnabled = it }
             )
         }
 

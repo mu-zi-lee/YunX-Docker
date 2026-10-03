@@ -10,6 +10,8 @@ import com.yunx.app.data.network.model.ShareSession
 /**
  * 迅雷分享解析仓库：解析分享 → 转存到临时目录 → 文件详情取直链。
  * 认证用 access_token（经 xunleiAccount 提供），无需转存密码（pass_code 由分享提供）。
+ * **列目录允许游客**：未登录时 token 传空串，请求不带 Authorization（分享接口匿名可用）；
+ * 取直链/转存仍需登录（[ensureTempDir]/[transferFile]/[getDownloadLink] 会抛「请先登录迅雷网盘」）。
  */
 class XunleiResolveRepository(
     private val api: XunleiApi,
@@ -23,8 +25,17 @@ class XunleiResolveRepository(
     /** shareId → 提取码（转存时仍需携带） */
     private val passCodes = mutableMapOf<String, String>()
 
+    /** 游客模式自造的设备标识（迅雷请求需要 X-Device-Id；未登录时进程内复用，不落库） */
+    private val guestDeviceId: String by lazy { XunleiApi.newDeviceId() }
+
     private suspend fun token(): String =
         accountProvider() ?: throw IllegalStateException("请先登录迅雷网盘")
+
+    /**
+     * 列表用 token：未登录返回空串 ⇒ 走**匿名分享接口**（带 Authorization 反而被判 unauthenticated）。
+     * 登录态仍走 [access]（含 token 过期自动刷新）。
+     */
+    private suspend fun accessOrEmpty(): String = if (accountProvider() == null) "" else access()
 
     /** 取 access_token 并缓存 user_id（captcha/init 需要，空 user_id 会得到降级 token） */
     private suspend fun access(): String {
@@ -49,6 +60,9 @@ class XunleiResolveRepository(
     private suspend fun deviceId(): String =
         deviceIdProvider() ?: throw IllegalStateException("缺少设备标识")
 
+    /** 设备标识：未登录时回退游客设备标识，别让「缺少设备标识」把匿名列目录挡在门外 */
+    private suspend fun deviceIdOrGuest(): String = deviceIdProvider() ?: guestDeviceId
+
     private suspend fun captcha(): String = captchaProvider() ?: ""
 
     override suspend fun createSession(link: String, pwd: String?, cookie: String): Result<ShareSession> =
@@ -57,8 +71,9 @@ class XunleiResolveRepository(
                 ?: throw IllegalArgumentException("无法识别迅雷分享链接")
             val effectivePwd = pwd?.takeIf { it.isNotBlank() } ?: ShareLinkParser.parse(link)?.pwd ?: ""
             passCodes[shareId] = effectivePwd
-            val access = access()
-            val result = api.getShare(shareId, effectivePwd, access, deviceId(), captcha())
+            // 游客模式：未登录时 token 为空 → 匿名请求（无 Authorization 头）
+            val access = accessOrEmpty()
+            val result = api.getShare(shareId, effectivePwd, access, deviceIdOrGuest(), captcha())
                 ?: throw IllegalStateException("未获取到分享信息")
             ShareSession(shareId, result.passCodeToken, result.title)
         }.fold(
@@ -68,7 +83,8 @@ class XunleiResolveRepository(
 
     override suspend fun listFiles(session: ShareSession, dirFid: String, cookie: String): Result<List<ShareFile>> =
         runCatching {
-            val access = access()
+            // 游客模式同样放行：无 token 时匿名列目录（下载/转存仍要求登录）
+            val access = accessOrEmpty()
             // 迅雷分享：顶层用 share（带提取码）；子目录用 share/detail（parent_id + pass_code_token）
             val files = mutableListOf<ShareFile>()
             var pageToken = ""
@@ -77,14 +93,14 @@ class XunleiResolveRepository(
                 val next = if (dirFid.isBlank() || dirFid == "0") {
                     val page = api.getShare(
                         session.shareId, passCodes[session.shareId] ?: "", access,
-                        deviceId(), captcha(), pageToken
+                        deviceIdOrGuest(), captcha(), pageToken
                     ) ?: throw IllegalStateException("未获取到文件列表")
                     files += page.files
                     page.nextPageToken
                 } else {
                     val page = api.getShareDetail(
                         session.shareId, dirFid, session.stoken, access,
-                        deviceId(), captcha(), pageToken
+                        deviceIdOrGuest(), captcha(), pageToken
                     ) ?: throw IllegalStateException("未获取到文件列表")
                     files += page.files
                     page.nextPageToken
@@ -110,8 +126,16 @@ class XunleiResolveRepository(
         session: ShareSession,
         file: ShareFile,
         toDirFid: String,
-        cookie: String
+        cookie: String,
+        skipSpaceCheck: Boolean
     ): Result<String> = runCatching {
+        // 转存前置空间校验：空间不足直接抛出，不再走后面的转存（避免被误报「转存超时」）；
+        // 批量入口已做过整批预算校验时跳过（避免同一批多次查配额）
+        if (!skipSpaceCheck) {
+            TransferSpaceGuard.ensureEnoughSpace(file.fsize.takeIf { it > 0 }, "迅雷") {
+                api.getQuota(access(), deviceId(), captcha())
+            }
+        }
         // 官方同步转存：restore 返回 trace_file_ids 映射，直接得到转存后的新文件 id（无需轮询）
         val newId = api.restore(
             shareId = session.shareId,
@@ -136,14 +160,22 @@ class XunleiResolveRepository(
         onFailure = { Result.failure(it) }
     )
 
+    /** 批量转存 / 批量下载前的整批空间预算校验：只查一次配额，不足时抛出（迅雷转存占用目标账号空间） */
+    override suspend fun ensureBatchSpace(sizes: List<Long>, credential: String): Boolean =
+        TransferSpaceGuard.ensureEnoughSpaceForBatch(sizes, "迅雷") {
+            api.getQuota(access(), deviceId(), captcha())
+        }
+
     /** 迅雷取直链：转存 → 取详情直链 → 删除临时转存文件（直链自带签名，删除不影响下载） */
     override suspend fun getShareDownloadLink(
         session: ShareSession,
         file: ShareFile,
-        cookie: String
+        cookie: String,
+        skipSpaceCheck: Boolean
     ): Result<DownloadLink> = runCatching {
         val dirFid = ensureTempDir(cookie).getOrThrow()
-        val savedFid = transferFile(session, file, dirFid, cookie).getOrThrow()
+        // 转存内部做空间校验（单文件下载）；批量时由调用方整批校验后跳过
+        val savedFid = transferFile(session, file, dirFid, cookie, skipSpaceCheck).getOrThrow()
         val link = api.getFileDetail(savedFid, access(), deviceId(), captcha())
             ?: throw IllegalStateException("获取下载链接失败")
         // 拿到直链后立即删除临时转存的文件（对齐官方 batchDelete；失败不阻断下载）

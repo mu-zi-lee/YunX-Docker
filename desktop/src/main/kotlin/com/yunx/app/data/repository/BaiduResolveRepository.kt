@@ -75,8 +75,12 @@ class BaiduResolveRepository(private val api: BaiduApi) : ShareResolveRepository
         session: ShareSession,
         file: ShareFile,
         toDirFid: String,
-        cookie: String
+        cookie: String,
+        skipSpaceCheck: Boolean
     ): Result<String> = runCatching {
+        // 转存前置空间校验：空间不足直接抛出，不再走后面的转存（避免被误报「转存超时」）；
+        // 批量入口已做过整批预算校验时跳过（避免同一批多次查配额）
+        if (!skipSpaceCheck) checkSpace(file, cookie)
         val (shareId, uk) = requireShareInfo(session, cookie)
         val result = api.transfer(shareId, uk, session.stoken, file.fid, toDirFid, cookie)
         result.fsId
@@ -84,6 +88,14 @@ class BaiduResolveRepository(private val api: BaiduApi) : ShareResolveRepository
         onSuccess = { Result.success(it) },
         onFailure = { Result.failure(it) }
     )
+
+    /** 批量转存 / 批量下载前的整批空间预算校验：只查一次配额，不足时抛出（百度转存占用目标账号空间） */
+    override suspend fun ensureBatchSpace(sizes: List<Long>, credential: String): Boolean =
+        TransferSpaceGuard.ensureEnoughSpaceForBatch(sizes, "百度") { api.getQuota(credential) }
+
+    /** 转存前置空间校验：空间不足直接抛出，不再走后面的转存与轮询 */
+    private suspend fun checkSpace(file: ShareFile, cookie: String) =
+        TransferSpaceGuard.ensureEnoughSpace(file.fsize.takeIf { it > 0 }, "百度") { api.getQuota(cookie) }
 
     /** 个人网盘文件直链（filemetas） */
     override suspend fun getDownloadLink(fid: String, cookie: String): Result<DownloadLink> = runCatching {
@@ -98,8 +110,11 @@ class BaiduResolveRepository(private val api: BaiduApi) : ShareResolveRepository
     override suspend fun getShareDownloadLink(
         session: ShareSession,
         file: ShareFile,
-        cookie: String
+        cookie: String,
+        skipSpaceCheck: Boolean
     ): Result<DownloadLink> = runCatching {
+        // 下载路径同样要先转存（占用空间）：单文件下载在此校验；批量时由调用方整批校验后跳过
+        if (!skipSpaceCheck) checkSpace(file, cookie)
         val (shareId, uk) = requireShareInfo(session, cookie)
         val dirPath = ensureTempDir(cookie).getOrThrow()
         val transferred = api.transfer(shareId, uk, session.stoken, file.fid, dirPath, cookie)

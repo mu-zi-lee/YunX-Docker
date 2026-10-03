@@ -11,15 +11,16 @@ import com.yunx.app.data.network.model.ShareSession
  * 139（和彩云）分享解析仓库：cookie → getOutLinkInfoV6 列目录 → getContentInfoFromOutLink 直链。
  * 139 分享无需转存（share host 直接列目录 + 取直链），credential 为登录 Cookie（含账号信息）；
  * authorization 从 cookie 提取，分享接口按需携带（可空）。
+ * 列目录允许游客（cookie 为空）：getOutLinkInfoV6 是匿名端点；取直链仍要求登录。
  */
 class C139ResolveRepository(private val api: C139Api) : ShareResolveRepository {
 
     override suspend fun createSession(link: String, pwd: String?, cookie: String): Result<ShareSession> {
         val parsed = ShareLinkParser.parse(link)
             ?: return Result.failure(IllegalArgumentException("无法识别分享链接"))
-        if (C139Constants.extractAccountFull(cookie).isNullOrBlank()) {
-            return Result.failure(IllegalStateException("登录态缺少账号信息，请重新登录"))
-        }
+        // 游客模式：不再要求 cookie 里含账号信息 —— 139 的列表端点（getOutLinkInfoV6）本身就是
+        // 匿名调用（account 固定空串、不带 authorization/mcloud-sign），空 cookie 也能列出目录。
+        // 下载/转存仍会在各自入口要求登录。
         return runCatching {
             // 139 分享无 token：shareId 即 linkID，stoken 暂存提取码
             // 密码优先级：用户手输 > 139 getOutLinkGeneral 明文回吐的 passwd（避免下载因缺密码报 9188）
@@ -62,12 +63,18 @@ class C139ResolveRepository(private val api: C139Api) : ShareResolveRepository {
         session: ShareSession,
         file: ShareFile,
         toDirFid: String,
-        cookie: String
+        cookie: String,
+        skipSpaceCheck: Boolean
     ): Result<String> = runCatching {
         val account = C139Constants.extractAccountFull(cookie)
             ?: throw IllegalStateException("登录态缺少账号信息，请重新登录")
         val authorization = C139Constants.extractAuthorization(cookie)
         // 139 转存：创建批量任务（AES 加密接口）→ 轮询查询结果 → 返回转存后新 fileId
+        // 转存前置空间校验：空间不足直接抛出，不再走后面的转存与轮询（避免被误报「转存超时」）；
+        // 批量入口已做过整批预算校验时跳过（避免同一批多次查配额）
+        if (!skipSpaceCheck) {
+            TransferSpaceGuard.ensureEnoughSpace(file.fsize.takeIf { it > 0 }, "139") { api.getQuota(cookie) }
+        }
         val taskId = api.createTransferTask(
             coIDLst = listOf(file.fid),
             catalogIDLst = emptyList(),
@@ -94,10 +101,18 @@ class C139ResolveRepository(private val api: C139Api) : ShareResolveRepository {
     override suspend fun getDownloadLink(fid: String, cookie: String): Result<DownloadLink> =
         Result.failure(UnsupportedOperationException("139 分享请使用 getShareDownloadLink"))
 
+    /** 批量转存前的整批空间预算校验：只查一次配额，不足时抛出（139 转存占用目标账号空间） */
+    override suspend fun ensureBatchSpace(sizes: List<Long>, credential: String): Boolean =
+        TransferSpaceGuard.ensureEnoughSpaceForBatch(sizes, "139") { api.getQuota(credential) }
+
+    /**
+     * skipSpaceCheck 仅用于对齐接口：139 分享下载走 dlFromOutLinkV3 直接取直链、不转存，故不做空间校验。
+     */
     override suspend fun getShareDownloadLink(
         session: ShareSession,
         file: ShareFile,
-        cookie: String
+        cookie: String,
+        skipSpaceCheck: Boolean
     ): Result<DownloadLink> = runCatching {
         val account = C139Constants.extractAccountFull(cookie)
             ?: throw IllegalStateException("登录态缺少账号信息，请重新登录")

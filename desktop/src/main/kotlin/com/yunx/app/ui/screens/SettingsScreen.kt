@@ -111,9 +111,11 @@ fun SettingsScreen(
     onThemeClick: () -> Unit,
     onAboutClick: () -> Unit,
     onSupportClick: () -> Unit,
+    /** 打开「实验性功能」二级页 */
+    onExperimentalClick: () -> Unit,
     backupManager: AuthBackupManager,
-    /** 用应用内置下载器下载更新 APK（URL + 文件名），由 MainScreen 注入 DownloadManager */
-    onDownloadUpdateApk: (url: String, fileName: String) -> Unit,
+    /** 用应用内置下载器下载更新包；fallbackUrl 非空时作为镜像下载失败后的直连回退（URL + 文件名 + 回退直连） */
+    onDownloadUpdateApk: (url: String, fileName: String, fallbackUrl: String?) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var showThreadsDialog by remember { mutableStateOf(false) }
@@ -146,13 +148,13 @@ fun SettingsScreen(
     // GitHub 下载镜像前缀：null/空 = 使用内置默认（UpdateChecker.MIRROR_PREFIX）
     var githubMirror by remember { mutableStateOf(settingsRepo.githubMirrorPrefix) }
     var showMirrorDialog by remember { mutableStateOf(false) }
+    // 接受预发布版更新：检查更新时包含 GitHub Pre-release（默认关闭）
+    var acceptPrerelease by remember { mutableStateOf(settingsRepo.acceptPrereleaseUpdate) }
     // 网络代理：三选一模式（直连 / 系统代理 / 手动配置），本地状态驱动副标题，弹窗内使用临时变量编辑
     var proxyMode by remember { mutableStateOf(settingsRepo.proxyMode) }
     var proxyHost by remember { mutableStateOf(settingsRepo.proxyHost) }
     var proxyPort by remember { mutableStateOf(settingsRepo.proxyPort.toString()) }
     var showProxyDialog by remember { mutableStateOf(false) }
-    // HTTP/2 开关：默认关闭（仅使用 HTTP/1.1）
-    var http2Enabled by remember { mutableStateOf(settingsRepo.http2Enabled) }
     // system 模式下展示当前实际解析到的系统代理（仅在进入该模式时读一次注册表，不随运行中变化实时刷新）
     val systemProxyInfo = remember(proxyMode) {
         if (proxyMode == SettingsRepository.PROXY_MODE_SYSTEM) SystemProxy.inspect() else null
@@ -323,7 +325,7 @@ fun SettingsScreen(
             onClick = {
                 scope.launch {
                     SnackbarController.show("正在检查更新…")
-                    val release = runCatching { UpdateChecker.fetchLatestRelease() }.getOrNull()
+                    val release = runCatching { UpdateChecker.fetchLatestRelease(acceptPrerelease) }.getOrNull()
                     val current = UpdateChecker.currentVersion()
                     if (release == null) {
                         SnackbarController.show("检查更新失败，请检查网络")
@@ -334,6 +336,24 @@ fun SettingsScreen(
                     }
                 }
             }
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // 接受预发布版更新：开启后检查更新包含 GitHub Pre-release，切换后下次检查才生效
+        SettingsItem(
+            icon = Icons.Outlined.SystemUpdate,
+            title = "接受预发布版更新",
+            description = if (acceptPrerelease) {
+                "检查更新时包含 GitHub Pre-release（可能不稳定）"
+            } else {
+                "只接收正式版更新"
+            },
+            onClick = {
+                acceptPrerelease = !acceptPrerelease
+                settingsRepo.acceptPrereleaseUpdate = acceptPrerelease
+            },
+            trailing = { Switch(checked = acceptPrerelease, onCheckedChange = null) }
         )
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -366,24 +386,12 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // HTTP/2 开关：默认关闭（仅使用 HTTP/1.1），开启后允许 ALPN 协商 h2
+        // 实验性功能二级页：HTTP/2、下载读缓冲、慢连接抢占、主页快捷方式（集中管理 + 一键重置）
         SettingsItem(
             icon = Icons.Outlined.Bolt,
-            title = "启用 HTTP/2",
-            description = if (http2Enabled) {
-                "已启用：允许协商 HTTP/2（理论上更快，实测差异通常不大）"
-            } else {
-                "默认仅使用 HTTP/1.1（HTTP/2 理论上更快，但实测差异通常不大）"
-            },
-            onClick = {
-                http2Enabled = !http2Enabled
-                settingsRepo.http2Enabled = http2Enabled
-                HttpClients.setHttp2Enabled(http2Enabled)
-                SnackbarController.show(
-                    if (http2Enabled) "已启用 HTTP/2（允许协商 h2）" else "已切换为仅使用 HTTP/1.1"
-                )
-            },
-            trailing = { Switch(checked = http2Enabled, onCheckedChange = null) }
+            title = "实验性功能",
+            description = "HTTP/2、下载读缓冲、慢连接抢占、主页快捷方式等高风险参数",
+            onClick = onExperimentalClick
         )
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -544,7 +552,7 @@ fun SettingsScreen(
                         showDevMenu = false
                         // 调试用途：直接弹出更新弹窗（不判断是否已是最新版），预览弹窗 UI
                         scope.launch {
-                            val release = runCatching { UpdateChecker.fetchLatestRelease() }.getOrNull()
+                            val release = runCatching { UpdateChecker.fetchLatestRelease(acceptPrerelease) }.getOrNull()
                             updateRelease = release ?: UpdateChecker.Release(
                                 tagName = "v1.2.4（预览）",
                                 body = "这是调试预览弹窗，用于查看更新弹窗 UI（含镜像站下载按钮）。",
@@ -569,12 +577,15 @@ fun SettingsScreen(
             release = release,
             onDownloadAsset = { url, name ->
                 updateRelease = null
-                onDownloadUpdateApk(url, name)
+                onDownloadUpdateApk(url, name, null)
                 SnackbarController.show("已加入下载 $name")
             },
+            // 镜像站下载：用设置页配置的自定义镜像前缀（未配置则用默认），并把 GitHub 直连 URL
+            // 作为 fallbackUrl —— 镜像站失效/失败时自动回退直连（与 GitHub 浏览下载行为一致）
             onDownloadMirrorAsset = { url, name ->
                 updateRelease = null
-                onDownloadUpdateApk(UpdateChecker.mirrorUrl(url), name)
+                val prefix = githubMirror?.ifBlank { null } ?: UpdateChecker.MIRROR_PREFIX
+                onDownloadUpdateApk(UpdateChecker.mirrorUrl(url, prefix), name, url)
                 SnackbarController.show("已通过镜像站加入下载 $name")
             },
             onLater = { updateRelease = null },
@@ -1302,7 +1313,7 @@ private fun SectionLabel(text: String) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SettingsItem(
+internal fun SettingsItem(
     icon: ImageVector,
     title: String,
     description: String,

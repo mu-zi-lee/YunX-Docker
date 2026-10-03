@@ -69,23 +69,9 @@ class QuarkResolveRepository(private val api: QuarkApi) : ShareResolveRepository
         session: ShareSession,
         file: ShareFile,
         toDirFid: String,
-        cookie: String
-    ): Result<String> = runCatching {
-        val taskId = api.saveShareFile(
-            shareId = session.shareId,
-            stoken = session.stoken,
-            pdirFid = file.pdirFid,
-            fid = file.fid,
-            fidToken = file.fidToken,
-            toPdirFid = toDirFid,
-            cookie = cookie
-        ) ?: throw IllegalStateException("转存失败")
-        api.pollTask(taskId, cookie)
-            ?: throw IllegalStateException("转存超时，请稍后重试")
-    }.fold(
-        onSuccess = { Result.success(it) },
-        onFailure = { Result.failure(it) }
-    )
+        cookie: String,
+        skipSpaceCheck: Boolean
+    ): Result<String> = saveToCloud(session, file, toDirFid, cookie, skipSpaceCheck)
 
     /** 获取文件下载直链（转存后调用） */
     override suspend fun getDownloadLink(fid: String, cookie: String): Result<DownloadLink> = runCatching {
@@ -107,8 +93,11 @@ class QuarkResolveRepository(private val api: QuarkApi) : ShareResolveRepository
     override suspend fun getShareDownloadLink(
         session: ShareSession,
         file: ShareFile,
-        cookie: String
+        cookie: String,
+        skipSpaceCheck: Boolean
     ): Result<DownloadLink> = runCatching {
+        // 空间校验放在创建临时目录之前：空间不足时直接抛出，不在网盘留下空目录
+        checkSpace(file, cookie, skipSpaceCheck)
         val baseDir = ensureTempDir(cookie).getOrThrow()
 
         // 唯一临时子目录：to_pdir_fid 每次不同 → 绕开夸克去重
@@ -127,13 +116,47 @@ class QuarkResolveRepository(private val api: QuarkApi) : ShareResolveRepository
         onFailure = { Result.failure(it) }
     )
 
+    /**
+     * 游客取链（未登录）：不碰用户网盘 —— 不建临时目录、不转存，直接按分享参数打 download 接口，
+     * 带回服务端随响应下发的游客态 __pugs。夸克只放行约 50MB 以内的小文件（超出报 23018）。
+     */
+    override suspend fun getGuestShareDownloadLink(
+        session: ShareSession,
+        file: ShareFile
+    ): Result<DownloadLink> = runCatching {
+        api.getGuestShareDownloadLink(
+            fid = file.fid,
+            fidToken = file.fidToken,
+            shareId = session.shareId,
+            stoken = session.stoken
+        ) ?: throw IllegalStateException("获取下载链接失败")
+    }.fold(
+        onSuccess = { Result.success(it) },
+        onFailure = { Result.failure(it) }
+    )
+
     /** 转存分享文件到用户网盘指定目录（转存功能：不删除，长期保存） */
     suspend fun saveToCloud(
         session: ShareSession,
         file: ShareFile,
         toDirFid: String,
-        cookie: String
-    ): Result<String> = transferFileTo(session, file, toDirFid, cookie)
+        cookie: String,
+        skipSpaceCheck: Boolean = false
+    ): Result<String> = runCatching {
+        checkSpace(file, cookie, skipSpaceCheck)
+        transferFileTo(session, file, toDirFid, cookie).getOrThrow()
+    }
+
+    /** 批量转存前的整批空间预算校验：只查一次配额，不足时抛出（不被批量循环容错吞掉） */
+    override suspend fun ensureBatchSpace(sizes: List<Long>, credential: String): Boolean =
+        TransferSpaceGuard.ensureEnoughSpaceForBatch(sizes, "夸克") { api.getQuota(credential) }
+
+    /** 转存前置空间校验：空间不足直接抛出，不再走后面的转存与轮询（避免被误报「转存超时」） */
+    private suspend fun checkSpace(file: ShareFile, cookie: String, skip: Boolean = false) {
+        // 批量入口已做过整批预算校验 → 跳过逐项校验，避免同一批多次查配额
+        if (skip) return
+        TransferSpaceGuard.ensureEnoughSpace(file.fsize.takeIf { it > 0 }, "夸克") { api.getQuota(cookie) }
+    }
 
     /** 转存到指定目录并轮询拿到新 fid（toPdirFid 由调用方指定） */
     private suspend fun transferFileTo(

@@ -65,6 +65,9 @@ fun main(args: Array<String>) {
         // HTTP/2 开关：默认关闭（仅 HTTP/1.1），开启后允许 ALPN 协商 h2。
         // 与代理同一时机装配，早于任何网络请求发出，启动即生效。
         com.yunx.app.data.network.HttpClients.setHttp2Enabled(settings.http2Enabled)
+        // 下载引擎调优参数（读缓冲大小 / 慢连接抢占开关、阈值、判定时长）：
+        // 与代理同一时机装配，读取「设置 → 实验性功能」的持久化值，下载任务开始前即生效。
+        com.yunx.app.data.download.DownloadTuning.applyFrom(settings)
     }
     // 原生暗色模式：让 Win32 原生菜单（托盘右键）跟随系统暗色。必须在创建任何窗口前调用。
     DarkMode.enable()

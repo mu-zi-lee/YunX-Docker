@@ -66,10 +66,16 @@ class Pan123ResolveRepository(
         session: ShareSession,
         file: ShareFile,
         toDirFid: String,
-        cookie: String
+        cookie: String,
+        skipSpaceCheck: Boolean
     ): Result<String> = runCatching {
         val token = cookie.ifBlank { tokenProvider() ?: "" }
         if (token.isBlank()) throw IllegalStateException("请先登录123云盘")
+        // 转存前置空间校验：空间不足直接抛出，不再走后面的转存与轮询（避免被误报「转存超时」）；
+        // 批量入口已做过整批预算校验时跳过（避免同一批多次查配额）
+        if (!skipSpaceCheck) {
+            TransferSpaceGuard.ensureEnoughSpace(file.fsize.takeIf { it > 0 }, "123") { api.getQuota(token) }
+        }
         val (taskId, shareId) = api.copySave(
             shareKey = session.shareId,
             sharePwd = session.stoken,
@@ -87,10 +93,18 @@ class Pan123ResolveRepository(
     override suspend fun getDownloadLink(fid: String, cookie: String): Result<DownloadLink> =
         Result.failure(UnsupportedOperationException("123 分享请使用 getShareDownloadLink"))
 
+    /** 批量转存前的整批空间预算校验：只查一次配额，不足时抛出（123 转存占用目标账号空间） */
+    override suspend fun ensureBatchSpace(sizes: List<Long>, credential: String): Boolean =
+        TransferSpaceGuard.ensureEnoughSpaceForBatch(sizes, "123") {
+            api.getQuota(credential.ifBlank { tokenProvider() ?: "" })
+        }
+
+    /** skipSpaceCheck 仅用于对齐接口：123 分享下载直接取分享直链、不转存，故不做空间校验。 */
     override suspend fun getShareDownloadLink(
         session: ShareSession,
         file: ShareFile,
-        cookie: String
+        cookie: String,
+        skipSpaceCheck: Boolean
     ): Result<DownloadLink> = runCatching {
         // cookie 参数即登录 token（ResolveViewModel.currentCredential 返回 accessToken）
         val token = cookie.ifBlank { tokenProvider() ?: "" }

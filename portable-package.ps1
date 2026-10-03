@@ -261,9 +261,11 @@ if ($LASTEXITCODE -ne 0) { throw "jpackage failed with exit $LASTEXITCODE" }
 Remove-Item $runtimeTmp -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host ""
-Write-Host "[4b/5] Building custom launcher (rename-proof / CJK path-proof)..." -ForegroundColor Cyan
+Write-Host "[4b/5] Building custom launcher (in-process JVM / rename-proof / CJK path-proof)..." -ForegroundColor Cyan
 # 换用自研启动器：jpackage 的启动器要求 "exe 名 == app\同名.cfg"，改 exe 名就失效；
-# 自研启动器固定读 app\YunX-Desktop.cfg，且用宽字符 API，中文路径/重命名都不会坏
+# 自研启动器固定读 app\YunX-Desktop.cfg，且用宽字符 API，中文路径/重命名都不会坏。
+# 启动器用 JNI（P/Invoke jvm.dll）在本进程内创建 JVM → 任务管理器只有一个顶层进程
+# 「云析 YunX-Desktop」，不再出现 runtime\bin\java.exe 子进程。
 $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $launcherSrc = Join-Path $root "launcher\Launcher.cs"
 $launcherExe = Join-Path $outDir "YunX-Desktop.exe"
@@ -288,7 +290,8 @@ using System.Reflection;
 [assembly: AssemblyInformationalVersion("$AppVersion")]
 "@ | Set-Content -Path $launcherInfo -Encoding UTF8
 # 先编译到 build\ 再覆盖：直接写正在使用的 release exe 可能被杀软/文件锁拒绝
-& $csc /nologo /target:winexe /platform:anycpu /optimize+ `
+# /platform:x64 必须：JNI 结构体按 x64 布局手工排布（进程内 JVM 仅支持 64 位运行时）
+& $csc /nologo /target:winexe /platform:x64 /optimize+ `
   "/win32icon:$launcherIco" `
   "/r:System.Windows.Forms.dll" `
   "/r:System.Drawing.dll" `

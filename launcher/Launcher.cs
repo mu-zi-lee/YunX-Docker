@@ -1,8 +1,9 @@
-// YunX-Desktop 便携版启动器（带启动闪屏）
+// YunX-Desktop 便携版启动器（进程内 JVM + 启动闪屏）
 //
 // 职责：
 // 1. 双击后 ~100ms 内渐显启动闪屏（应用图标 + 「正在启动…」），遮盖 JVM/Compose 启动延迟
-// 2. 解析 app\YunX-Desktop.cfg 并拉起 runtime\bin\java.exe
+// 2. 解析 app\YunX-Desktop.cfg，用 JNI 在【本进程内】创建 JVM 并调用主类
+//    （不再另起 runtime\bin\java.exe 子进程 → 任务管理器只显示一个「云析 YunX-Desktop」进程）
 // 3. 检测到应用主窗口后交叉淡出：闪屏淡出 + 应用窗口通过 WS_EX_LAYERED 由透明渐入，
 //    实现无缝衔接
 // 4. 固定读取 app\YunX-Desktop.cfg（不跟随 exe 名）→ 支持任意重命名；全程宽字符 API → 兼容中文路径
@@ -11,7 +12,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -28,6 +28,24 @@ namespace YunXDesktop
         static readonly List<string> classpath = new List<string>();
         static SplashForm splash;
         static int exitCode = 1;
+        // JVM 是否已退出：供闪屏交叉淡出线程轮询（替代原先的 Process.HasExited）
+        static volatile bool jvmExited;
+
+        // ---- JNI 常量与函数表下标（x64 标准布局）----
+        const int JNI_VERSION_1_8 = 0x00010008;
+        const int JNI_OK = 0;
+        // JNINativeInterface_（JNIEnv 函数表）下标
+        const int JNI_FindClass = 6;
+        const int JNI_ExceptionOccurred = 15;
+        const int JNI_ExceptionDescribe = 16;
+        const int JNI_ExceptionClear = 17;
+        const int JNI_GetStaticMethodID = 113;
+        const int JNI_CallStaticVoidMethodA = 143;
+        const int JNI_NewString = 163;
+        const int JNI_NewObjectArray = 172;
+        const int JNI_SetObjectArrayElement = 174;
+        // JNIInvokeInterface_（JavaVM 函数表）下标
+        const int VM_DestroyJavaVM = 3;
 
         [STAThread]
         static int Main(string[] args)
@@ -39,7 +57,7 @@ namespace YunXDesktop
             if (Array.IndexOf(args, "--jcef-smoke") >= 0)
                 return RunJava(args, false);
 
-            // 启动闪屏跑在主线程消息循环；java 启动与窗口检测在后台线程
+            // 启动闪屏跑在主线程消息循环；JVM 创建与窗口检测在后台线程
             splash = new SplashForm();
             var done = new ManualResetEvent(false);
             var worker = new Thread((ThreadStart)delegate
@@ -57,18 +75,21 @@ namespace YunXDesktop
 
         static int RunJava(string[] args, bool useSplash)
         {
+            // 所有非托管内存记录在此，函数结束统一释放
+            var allocations = new List<IntPtr>();
             try
             {
                 // app-image 根目录 = 本 exe 所在目录（<root>\app、<root>\runtime）
                 string root = AppDomain.CurrentDomain.BaseDirectory;
 
                 string appDir = Path.Combine(root, "app");
-                string javaExe = Path.Combine(root, "runtime", "bin", "java.exe");
+                string runtimeBin = Path.Combine(root, "runtime", "bin");
+                string jvmDll = Path.Combine(runtimeBin, "server", "jvm.dll");
                 string cfgPath = Path.Combine(appDir, "YunX-Desktop.cfg");
 
-                if (!File.Exists(javaExe))
+                if (!File.Exists(jvmDll))
                 {
-                    Fail("未找到 Java 运行时：\n" + javaExe);
+                    Fail("未找到 Java 运行时：\n" + jvmDll);
                     return 1;
                 }
                 if (!File.Exists(cfgPath))
@@ -87,45 +108,162 @@ namespace YunXDesktop
                 // 等效 jpackage 环境补充：原生库搜索路径（Skiko / JNA / SQLite 等）
                 javaOpts.Add("-Djava.library.path=" + appDir);
                 javaOpts.Add("-Dskiko.library.path=" + appDir);
+                // JNI 方式没有命令行 -cp，classpath 通过系统属性传入（等价 jpackage 的 -cp）
+                javaOpts.Insert(0, "-Djava.class.path=" + string.Join(";", classpath.ToArray()));
 
-                var sb = new StringBuilder();
-                foreach (string opt in javaOpts)
-                    sb.Append(Quote(opt)).Append(' ');
-                sb.Append(Quote("-cp")).Append(' ');
-                sb.Append(Quote(string.Join(";", classpath.ToArray())));
-                sb.Append(' ').Append(mainClass);
-                foreach (string a in args)
-                    sb.Append(' ').Append(Quote(a));
-
-                var psi = new ProcessStartInfo
-                {
-                    FileName = javaExe,
-                    Arguments = sb.ToString(),
-                    UseShellExecute = false,
-                    WorkingDirectory = root,
-                    CreateNoWindow = true
-                };
                 // 闪屏模式：java 侧窗口全透明启动、内容就绪后自行渐入（与闪屏淡出交叉）
-                if (useSplash) psi.EnvironmentVariables["YUNXPC_SPLASH"] = "1";
+                if (useSplash) Environment.SetEnvironmentVariable("YUNXPC_SPLASH", "1");
 
-                using (Process p = Process.Start(psi))
+                // 工作目录与 java.exe 启动保持一致（<root>）
+                Directory.SetCurrentDirectory(root);
+
+                // 让 jvm.dll 的同目录依赖（java.dll / net.dll / msvcp140.dll ...）能在 runtime\bin 下解析
+                SetDllDirectory(runtimeBin);
+
+                IntPtr hJvm = LoadLibrary(jvmDll);
+                if (hJvm == IntPtr.Zero)
                 {
-                    bool windowSeen = false;
-                    if (useSplash) windowSeen = CrossFade(p);
-                    p.WaitForExit();
-                    int code = p.ExitCode;
-                    if (useSplash && code != 0 && !windowSeen)
-                    {
-                        // 应用在主窗口出现前异常退出：提示而非静默消失
-                        Fail("应用异常退出（代码 " + code + "）。");
-                    }
-                    return code;
+                    Fail("无法加载 jvm.dll（Win32 错误 " + Marshal.GetLastWin32Error() + "）：\n" + jvmDll);
+                    return 1;
                 }
+
+                IntPtr pCreate = GetProcAddress(hJvm, "JNI_CreateJavaVM");
+                IntPtr pGetDefault = GetProcAddress(hJvm, "JNI_GetDefaultJavaVMInitArgs");
+                if (pCreate == IntPtr.Zero || pGetDefault == IntPtr.Zero)
+                {
+                    Fail("jvm.dll 缺少 JNI 调用接口（JNI_CreateJavaVM / JNI_GetDefaultJavaVMInitArgs）");
+                    return 1;
+                }
+                var createVm = (JNI_CreateJavaVMDelegate)Marshal.GetDelegateForFunctionPointer(
+                    pCreate, typeof(JNI_CreateJavaVMDelegate));
+                var getDefaultArgs = (JNI_GetDefaultJavaVMInitArgsDelegate)Marshal.GetDelegateForFunctionPointer(
+                    pGetDefault, typeof(JNI_GetDefaultJavaVMInitArgsDelegate));
+
+                // ---- 组装 JavaVMInitArgs ----
+                // x64 布局：version@0(4) nOptions@4(4) options@8(ptr) ignoreUnrecognized@16(jboolean) → 24 字节
+                const int ARGS_SIZE = 24;
+                IntPtr argsPtr = Alloc(allocations, ARGS_SIZE);
+                for (int i = 0; i < ARGS_SIZE; i += 8) Marshal.WriteInt64(argsPtr, i, 0); // AllocHGlobal 不清零
+                Marshal.WriteInt32(argsPtr, 0, JNI_VERSION_1_8);
+                getDefaultArgs(argsPtr);                    // 取默认参数（版本/默认选项），失败也继续
+                Marshal.WriteInt32(argsPtr, 0, JNI_VERSION_1_8);
+
+                int n = javaOpts.Count;
+                // JavaVMOption：optionString@0(ptr) extraInfo@8(ptr) → 16 字节
+                IntPtr optionsPtr = Alloc(allocations, Math.Max(1, n) * 16);
+                for (int i = 0; i < n; i++)
+                {
+                    // optionString 用 ANSI：与 JVM 在 Windows 上使用的原生路径编码（CP_ACP）一致
+                    IntPtr s = Marshal.StringToHGlobalAnsi(javaOpts[i]);
+                    allocations.Add(s);
+                    Marshal.WriteIntPtr(optionsPtr, i * 16, s);
+                    Marshal.WriteIntPtr(optionsPtr, i * 16 + 8, IntPtr.Zero);
+                }
+                Marshal.WriteInt32(argsPtr, 4, n);
+                Marshal.WriteIntPtr(argsPtr, 8, optionsPtr);
+                Marshal.WriteInt64(argsPtr, 16, 1);         // ignoreUnrecognized = JNI_TRUE
+
+                // ---- 在本进程内创建 JVM ----
+                IntPtr vmPtr = Alloc(allocations, IntPtr.Size);
+                IntPtr envPtr = Alloc(allocations, IntPtr.Size);
+                int rc = createVm(vmPtr, envPtr, argsPtr);
+                if (rc != JNI_OK)
+                {
+                    Fail("创建 Java 虚拟机失败（JNI 错误码 " + rc + "）");
+                    return 1;
+                }
+                IntPtr vm = Marshal.ReadIntPtr(vmPtr);
+                IntPtr env = Marshal.ReadIntPtr(envPtr);
+
+                // ---- 读取 JNIEnv 函数表，绑定要用到的 JNI 函数 ----
+                IntPtr envTable = Marshal.ReadIntPtr(env);
+                var findClass = Fn<FindClassDelegate>(envTable, JNI_FindClass);
+                var getStaticMethodID = Fn<GetStaticMethodIDDelegate>(envTable, JNI_GetStaticMethodID);
+                var callStaticVoidMethodA = Fn<CallStaticVoidMethodADelegate>(envTable, JNI_CallStaticVoidMethodA);
+                var newString = Fn<NewStringDelegate>(envTable, JNI_NewString);
+                var newObjectArray = Fn<NewObjectArrayDelegate>(envTable, JNI_NewObjectArray);
+                var setObjectArrayElement = Fn<SetObjectArrayElementDelegate>(envTable, JNI_SetObjectArrayElement);
+                var exceptionOccurred = Fn<ExceptionOccurredDelegate>(envTable, JNI_ExceptionOccurred);
+                var exceptionDescribe = Fn<ExceptionDescribeDelegate>(envTable, JNI_ExceptionDescribe);
+                var exceptionClear = Fn<ExceptionClearDelegate>(envTable, JNI_ExceptionClear);
+
+                IntPtr mainKtClass = findClass(env, mainClass.Replace('.', '/'));
+                if (mainKtClass == IntPtr.Zero)
+                {
+                    exceptionDescribe(env); exceptionClear(env);
+                    Fail("未找到主类：" + mainClass);
+                    return 1;
+                }
+                IntPtr mainMid = getStaticMethodID(env, mainKtClass, "main", "([Ljava/lang/String;)V");
+                if (mainMid == IntPtr.Zero)
+                {
+                    exceptionDescribe(env); exceptionClear(env);
+                    Fail("主类缺少 main(String[]) 方法：" + mainClass);
+                    return 1;
+                }
+
+                // ---- 构造 String[] 实参：命令行参数透传到 main(args) ----
+                IntPtr stringClass = findClass(env, "java/lang/String");
+                IntPtr argArray = newObjectArray(env, args.Length, stringClass, IntPtr.Zero);
+                for (int i = 0; i < args.Length; i++)
+                {
+                    // 用 NewString(jchar*) 传 UTF-16，天然支持中文等非 ASCII 参数
+                    char[] cs = args[i].ToCharArray();
+                    GCHandle pinned = GCHandle.Alloc(cs, GCHandleType.Pinned);
+                    IntPtr js;
+                    try { js = newString(env, pinned.AddrOfPinnedObject(), cs.Length); }
+                    finally { pinned.Free(); }
+                    setObjectArrayElement(env, argArray, i, js);
+                }
+                // jvalue 联合体（x64 为 8 字节）：仅一个变参槽，放 String[]
+                IntPtr jvaluePtr = Alloc(allocations, 8);
+                Marshal.WriteIntPtr(jvaluePtr, 0, argArray);
+
+                // 闪屏模式：独立线程等待主窗口出现后淡出闪屏（本线程将阻塞在 main 调用上）
+                var windowSeen = new bool[1];
+                if (useSplash)
+                {
+                    var watcher = new Thread((ThreadStart)delegate { windowSeen[0] = CrossFade(); });
+                    watcher.IsBackground = true;
+                    watcher.Start();
+                }
+
+                // ---- 调用 com.yunx.app.MainKt.main(String[])（阻塞直到应用退出）----
+                callStaticVoidMethodA(env, mainKtClass, mainMid, jvaluePtr);
+
+                int code = 0;
+                IntPtr pending = exceptionOccurred(env);
+                if (pending != IntPtr.Zero)
+                {
+                    exceptionDescribe(env);   // 打印到 stderr
+                    exceptionClear(env);
+                    code = 1;
+                }
+                jvmExited = true;
+
+                // DestroyJavaVM 阻塞至所有非守护线程结束，保证进程生命周期正确
+                IntPtr vmTable = Marshal.ReadIntPtr(vm);
+                var destroyVm = Fn<DestroyJavaVMDelegate>(vmTable, VM_DestroyJavaVM);
+                destroyVm(vm);
+
+                if (useSplash && code != 0 && !windowSeen[0])
+                {
+                    // 应用在主窗口出现前异常退出：提示而非静默消失
+                    Fail("应用异常退出（代码 " + code + "）。");
+                }
+                return code;
             }
             catch (Exception ex)
             {
                 Fail("启动失败：\n" + ex.Message);
                 return 1;
+            }
+            finally
+            {
+                foreach (IntPtr p in allocations)
+                {
+                    try { Marshal.FreeHGlobal(p); } catch { }
+                }
             }
         }
 
@@ -155,41 +293,34 @@ namespace YunXDesktop
             }
         }
 
-        /// 等待应用主窗口出现 → 闪屏淡出 + 应用窗口透明渐入（交叉衔接）
+        /// 等待应用主窗口出现 → 闪屏淡出。
+        /// 应用窗口的渐入由 java 侧自行完成（YUNXPC_SPLASH=1：窗口全透明显示，内容首帧就绪后渐入）。
         /// @return 是否检测到应用主窗口
-        static bool CrossFade(Process p)
+        static bool CrossFade()
         {
-            uint pid = (uint)p.Id;
+            uint pid = GetCurrentProcessId();
             IntPtr hwnd = IntPtr.Zero;
             int waited = 0;
             while (waited < 45000)
             {
-                if (p.HasExited) break;
+                if (jvmExited) break;
                 hwnd = FindVisibleWindow(pid);
                 if (hwnd != IntPtr.Zero) break;
                 Thread.Sleep(15);
                 waited += 15;
             }
-
-            if (hwnd != IntPtr.Zero)
-            {
-                // 主窗口已出现：只需淡出闪屏。主窗口的渐入由 java 侧自行完成
-                // （YUNXPC_SPLASH=1：窗口全透明显示，内容首帧就绪后渐入）。
-                // 此前由启动器驱动渐入，但它无法感知内容何时真正上屏——淡入结束时
-                // 内容才出现，界面表现为"忽然弹出"。
-                splash.BeginFadeOut();
-                return true;
-            }
-            // 窗口迟迟未出现（慢盘解包等）：直接撤掉闪屏，等待进程结果
             splash.BeginFadeOut();
-            return false;
+            return hwnd != IntPtr.Zero;
         }
 
+        /// 查找本进程内首个「可见且带标题」的顶层窗口（排除启动闪屏自身）
         static IntPtr FindVisibleWindow(uint pid)
         {
             IntPtr found = IntPtr.Zero;
+            IntPtr splashHandle = splash != null ? splash.HandleValue : IntPtr.Zero;
             EnumWindows(delegate (IntPtr h, IntPtr l)
             {
+                if (h == splashHandle) return true;   // 跳过启动闪屏
                 uint wpid;
                 GetWindowThreadProcessId(h, out wpid);
                 if (wpid == pid && IsWindowVisible(h) && GetWindowTextLength(h) > 0)
@@ -202,16 +333,19 @@ namespace YunXDesktop
             return found;
         }
 
-        static string Quote(string s)
+        // ---- 非托管内存 / JNI 绑定小工具 ----
+        static IntPtr Alloc(List<IntPtr> keep, int size)
         {
-            var sb = new StringBuilder("\"");
-            foreach (char c in s)
-            {
-                if (c == '"') sb.Append("\\\"");
-                else sb.Append(c);
-            }
-            sb.Append('"');
-            return sb.ToString();
+            IntPtr p = Marshal.AllocHGlobal(size);
+            keep.Add(p);
+            return p;
+        }
+
+        /// 从 JNI 函数表取第 index 个函数并转成委托
+        static T Fn<T>(IntPtr table, int index)
+        {
+            IntPtr p = Marshal.ReadIntPtr(table, index * IntPtr.Size);
+            return (T)(object)Marshal.GetDelegateForFunctionPointer(p, typeof(T));
         }
 
         static void Fail(string msg)
@@ -223,21 +357,50 @@ namespace YunXDesktop
             catch { }
         }
 
+        // ---- JNI 委托（JNICALL = stdcall；x64 下与默认调用约定相同）----
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        delegate int JNI_CreateJavaVMDelegate(IntPtr pvm, IntPtr penv, IntPtr args);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        delegate int JNI_GetDefaultJavaVMInitArgsDelegate(IntPtr args);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        delegate int DestroyJavaVMDelegate(IntPtr vm);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        delegate IntPtr FindClassDelegate(IntPtr env, [MarshalAs(UnmanagedType.LPStr)] string name);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        delegate IntPtr GetStaticMethodIDDelegate(IntPtr env, IntPtr clazz,
+            [MarshalAs(UnmanagedType.LPStr)] string name, [MarshalAs(UnmanagedType.LPStr)] string sig);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        delegate void CallStaticVoidMethodADelegate(IntPtr env, IntPtr clazz, IntPtr methodID, IntPtr args);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        delegate IntPtr NewStringDelegate(IntPtr env, IntPtr unicode, int len);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        delegate IntPtr NewObjectArrayDelegate(IntPtr env, int len, IntPtr elementClass, IntPtr initial);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        delegate void SetObjectArrayElementDelegate(IntPtr env, IntPtr array, int index, IntPtr val);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        delegate IntPtr ExceptionOccurredDelegate(IntPtr env);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        delegate void ExceptionDescribeDelegate(IntPtr env);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+        delegate void ExceptionClearDelegate(IntPtr env);
+
         // ---- Win32 ----
         delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern IntPtr LoadLibrary(string lpFileName);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern bool SetDllDirectory(string lpPathName);
+        [DllImport("kernel32.dll", CharSet = CharSet.Ansi, SetLastError = true, BestFitMapping = false)]
+        static extern IntPtr GetProcAddress(IntPtr hModule, string lpProcName);
+        [DllImport("kernel32.dll")]
+        static extern uint GetCurrentProcessId();
 
         [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc cb, IntPtr lParam);
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
         [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
         [DllImport("user32.dll")] static extern int GetWindowTextLength(IntPtr hWnd);
-        [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hWnd, int nIndex);
-        [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
-        [DllImport("user32.dll")] static extern bool SetLayeredWindowAttributes(IntPtr hWnd, uint crKey, byte alpha, uint dwFlags);
         [DllImport("user32.dll")] static extern bool SetProcessDPIAware();
-
-        const int GWL_EXSTYLE = -20;
-        const int WS_EX_LAYERED = 0x00080000;
-        const uint LWA_ALPHA = 2;
     }
 
     /// 启动闪屏：Win11 圆角深色卡片，微渐变背景 + 流光进度条，缓动渐显
@@ -250,9 +413,12 @@ namespace YunXDesktop
         readonly System.Windows.Forms.Timer anim = new System.Windows.Forms.Timer();
         double fadeT;   // 渐显进度 0..1
         int tick;       // 动画帧（进度条相位）
+        IntPtr handleValue;   // 窗口句柄（供窗口枚举线程排除闪屏自身）
 
         // 主题色：与深色 UI 一致的底色 + 柔和蓝的强调色
         static readonly Color Accent = Color.FromArgb(0x5B, 0x8D, 0xFF);
+
+        public IntPtr HandleValue { get { return handleValue; } }
 
         public SplashForm()
         {
@@ -289,6 +455,7 @@ namespace YunXDesktop
 
         protected override void OnHandleCreated(EventArgs e)
         {
+            handleValue = Handle;
             base.OnHandleCreated(e);
             // Win11 圆角窗口（Win10 无此属性，静默忽略）
             try

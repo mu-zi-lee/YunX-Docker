@@ -48,6 +48,13 @@ interface Pan123AccountDao {
     suspend fun clear()
 }
 
+interface Pan115AccountDao {
+    fun observeAccount(): Flow<Pan115AccountEntity?>
+    suspend fun upsert(account: Pan115AccountEntity)
+    suspend fun getAccount(): Pan115AccountEntity?
+    suspend fun clear()
+}
+
 interface DownloadTaskDao {
     fun observeAll(): Flow<List<DownloadTaskEntity>>
     suspend fun insert(task: DownloadTaskEntity): Long

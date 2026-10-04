@@ -63,6 +63,7 @@ import androidx.compose.ui.unit.sp
 import com.yunx.app.data.network.model.ShareExpire
 import com.yunx.app.data.network.model.ShareFile
 import com.yunx.app.ui.SnackbarController
+import com.yunx.app.ui.components.FadeAlertDialog
 import com.yunx.app.ui.rememberGlobalSnackbarHostState
 import com.yunx.app.util.DesktopActions
 import com.yunx.app.ui.resolve.BackToParentItem
@@ -597,6 +598,7 @@ internal fun ShareResultDialog(
         info.shareUrl.contains("uc.cn") -> "UC网盘"
         info.shareUrl.contains("xunlei.com") -> "迅雷网盘"
         info.shareUrl.contains("baidu.com") -> "百度网盘"
+        info.shareUrl.contains("115") -> "115网盘"
         else -> "夸克网盘"
     }
     val shareText = buildString {
@@ -625,6 +627,15 @@ internal fun ShareResultDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                // 非致命提示（如 115 分享已建但有效期没改成功），不打断分享结果展示
+                info.warning?.takeIf { it.isNotBlank() }?.let { warning ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = warning,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
                 // Dialog 内提示（AlertDialog 为独立窗口，需自带 Snackbar 宿主）
                 SnackbarHost(hostState = snackbarHostState)
             }
@@ -679,17 +690,91 @@ private fun randomPasscode(): String {
     return (1..4).map { chars.random() }.joinToString("")
 }
 
-/** 中性码 → 展示文案；未知值显示「未知」而不是 fail-open 成「永久有效」 */
+/** 中性码 → 展示文案；未知值显示「未知」而不是 fail-open 成「永久有效」（115 用自己的 101..105 码位） */
 private fun expireLabel(type: Int): String = when (type) {
     ShareExpire.FOREVER -> "永久有效"
     ShareExpire.ONE_DAY -> "1 天"
     ShareExpire.SEVEN_DAYS -> "7 天"
     ShareExpire.THIRTY_DAYS -> "30 天"
+    ShareExpire.PAN115_FOREVER -> "永久有效"
+    ShareExpire.PAN115_ONE_DAY -> "1 天"
+    ShareExpire.PAN115_THREE_DAYS -> "3 天"
+    ShareExpire.PAN115_SEVEN_DAYS -> "7 天"
+    ShareExpire.PAN115_FIFTEEN_DAYS -> "15 天"
     else -> "未知"
 }
 
 /** 批量操作步骤类型 */
 internal enum class BatchStep { MENU, SHARE, MOVE, DELETE }
+
+/**
+ * 新建文件夹名称本地校验：非空、不是 `.` / `..`、不含 `/` `\` 与控制字符、长度上限 255。
+ * @return 不合法的原因（给用户看）；合法返回 null
+ */
+internal fun cloudFolderNameError(raw: String): String? {
+    val name = raw.trim()
+    return when {
+        name.isEmpty() -> "名称不能为空"
+        name == "." || name == ".." -> "名称不能是 . 或 .."
+        name.length > 255 -> "名称最多 255 个字符"
+        name.any { it == '/' || it == '\\' || it.code < 0x20 } -> "名称不能含 / \\ 或控制字符"
+        else -> null
+    }
+}
+
+/**
+ * 新建文件夹弹窗（各云盘页共用，窗口内覆盖层，不使用 material3 AlertDialog）：
+ * 只做本地名称校验，创建请求由各页 ViewModel 发出；确认后立即关闭，结果走各页既有的 cloudMessage → Snackbar。
+ */
+@Composable
+internal fun CloudCreateFolderDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var touched by remember { mutableStateOf(false) }
+    val error = cloudFolderNameError(name)
+    val showError = touched && error != null
+    FadeAlertDialog(
+        visible = true,
+        onDismissRequest = onDismiss,
+        title = { Text("创建文件夹") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = {
+                        name = it
+                        touched = true
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("文件夹名称") },
+                    singleLine = true,
+                    isError = showError,
+                    supportingText = {
+                        Text(
+                            text = if (showError) error!! else "创建在当前目录下",
+                            color = if (showError) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                    }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(name.trim()) },
+                enabled = error == null
+            ) { Text("创建") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
 
 /**
  * 批量操作弹窗（长按多选后）：下载 / 分享 / 移动 / 删除。

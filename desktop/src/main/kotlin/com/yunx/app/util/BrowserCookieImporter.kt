@@ -39,6 +39,7 @@ object BrowserCookieImporter {
         "UC" -> listOf(".uc.cn")
         "BAIDU" -> listOf(".baidu.com")
         "C139" -> listOf("mail.10086.cn", "yun.139.com", ".10086.cn")
+        "PAN115" -> listOf(".115.com", ".115cdn.com")
         else -> emptyList()
     }
 

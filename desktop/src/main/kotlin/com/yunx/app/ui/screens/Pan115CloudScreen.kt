@@ -29,13 +29,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
-import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Share
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -68,7 +67,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.yunx.app.data.network.model.ShareExpire
 import com.yunx.app.data.network.model.ShareFile
+import com.yunx.app.ui.components.FadeAlertDialog
 import com.yunx.app.ui.items.MultiSelectAction
 import com.yunx.app.ui.items.MultiSelectBar
 import com.yunx.app.ui.components.ScrollToTopButton
@@ -76,39 +77,49 @@ import com.yunx.app.ui.resolve.DownloadLinkDialog
 import com.yunx.app.ui.resolve.BackToParentItem
 import com.yunx.app.ui.resolve.CrumbBar
 import com.yunx.app.ui.resolve.ShareFileRow
-import com.yunx.app.ui.viewmodel.C139CloudUiState
-import com.yunx.app.ui.viewmodel.C139CloudViewModel
+import com.yunx.app.ui.viewmodel.Pan115CloudUiState
+import com.yunx.app.ui.viewmodel.Pan115CloudViewModel
+
+/** 新建文件夹名称本地校验：非空、不是 `.` / `..`、不含 `/` `\` 与控制字符、长度上限 255 */
+private fun pan115NameError(raw: String): String? {
+    val name = raw.trim()
+    return when {
+        name.isEmpty() -> "名称不能为空"
+        name == "." || name == ".." -> "名称不能是 . 或 .."
+        name.length > 255 -> "名称最多 255 个字符"
+        name.any { it == '/' || it == '\\' || it.code < 0x20 } -> "名称不能含 / \\ 或控制字符"
+        else -> null
+    }
+}
 
 /**
- * 139 网盘（和彩云）云盘浏览页（参考百度/夸克云盘）：
+ * 115 网盘云盘浏览页（对齐 123/139 云盘页）：
  * - 目录浏览 + 下拉刷新 + 面包屑回退
  * - 长按多选（批量下载/分享/移动/删除）
- * - 文件/文件夹操作菜单（下载/重命名/移动/分享/删除）
- * 认证走 Cookie（内部提取 authorization），目录用 fileId。
+ * - 文件/文件夹操作菜单（下载/重命名/移动/分享/删除）+ 新建文件夹
+ * 认证走整串登录 Cookie，目录用 cid（根="0"）。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun C139CloudScreen(
-    viewModel: C139CloudViewModel,
+fun Pan115CloudScreen(
+    viewModel: Pan115CloudViewModel,
     scrollBehavior: TopAppBarScrollBehavior,
     onExit: () -> Unit,
     onDownloadStarted: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val state by viewModel.uiState.collectAsState()
-    // 系统返回键 → 子目录返回上一级，根目录返回账号列表（对齐解析页返回行为）
     BackHandler {
         val s = state
-        if (s is C139CloudUiState.Loaded && s.pathNames.isNotEmpty()) viewModel.back() else onExit()
+        if (s is Pan115CloudUiState.Loaded && s.pathNames.isNotEmpty()) viewModel.back() else onExit()
     }
-    // 文件列表滚动状态（返回顶部按钮用）
     val listState = rememberLazyListState()
     var showActionSheet by remember { mutableStateOf(false) }
     var showRename by remember { mutableStateOf(false) }
     var showMove by remember { mutableStateOf(false) }
     var showShare by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
-    // 新建文件夹弹窗（窗口内覆盖层）
+    // 新建文件夹弹窗（窗口内覆盖层，不使用 material3 AlertDialog）
     var showCreateFolder by remember { mutableStateOf(false) }
 
     LaunchedEffect(viewModel.cloudMessage) {
@@ -125,7 +136,6 @@ fun C139CloudScreen(
         }
     }
 
-    // 单文件下载确认弹窗（对齐解析页：展示直链，长按可复制）
     viewModel.downloadLink?.let { link ->
         DownloadLinkDialog(
             link = link,
@@ -143,15 +153,15 @@ fun C139CloudScreen(
             transitionSpec = {
                 fadeIn(tween(200)) togetherWith fadeOut(tween(140))
             },
-            label = "c139CloudState"
+            label = "pan115CloudState"
         ) { s ->
             when (s) {
-                is C139CloudUiState.Loading -> Box(
+                is Pan115CloudUiState.Loading -> Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) { CircularProgressIndicator() }
 
-                is C139CloudUiState.Error -> Box(
+                is Pan115CloudUiState.Error -> Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
@@ -171,7 +181,7 @@ fun C139CloudScreen(
                     }
                 }
 
-                is C139CloudUiState.Loaded -> Box(modifier = Modifier.fillMaxSize()) {
+                is Pan115CloudUiState.Loaded -> Box(modifier = Modifier.fillMaxSize()) {
                     PullToRefreshBox(
                         isRefreshing = viewModel.refreshing,
                         onRefresh = { viewModel.refresh() },
@@ -216,7 +226,7 @@ fun C139CloudScreen(
                                             }
                                             Column(modifier = Modifier.weight(1f)) {
                                                 Text(
-                                                    text = "139网盘",
+                                                    text = "115网盘",
                                                     style = MaterialTheme.typography.titleMedium,
                                                     fontWeight = FontWeight.Medium,
                                                     maxLines = 1,
@@ -240,7 +250,7 @@ fun C139CloudScreen(
                                     }
                                     if (!viewModel.multiSelectMode) {
                                         CrumbBar(
-                                            rootTitle = "139网盘",
+                                            rootTitle = "115网盘",
                                             pathNames = s.pathNames,
                                             onNavigate = { viewModel.navigateToLevel(it) }
                                         )
@@ -302,7 +312,6 @@ fun C139CloudScreen(
                         }
                     }
 
-                    // 返回顶部按钮（上滑离开顶部后显示；多选模式下上移避开底部批量栏）
                     ScrollToTopButton(
                         listState = listState,
                         modifier = Modifier
@@ -345,9 +354,8 @@ fun C139CloudScreen(
 
     // 文件操作菜单
     if (showActionSheet && viewModel.actionFile != null) {
-        C139ActionSheet(
+        Pan115ActionSheet(
             file = viewModel.actionFile!!,
-            viewModel = viewModel,
             onDownload = {
                 showActionSheet = false
                 viewModel.downloadFile()
@@ -381,22 +389,25 @@ fun C139CloudScreen(
     }
 
     if (showRename && viewModel.actionFile != null) {
-        C139RenameDialog(
+        Pan115RenameDialog(
             file = viewModel.actionFile!!,
-            viewModel = viewModel,
+            onConfirm = { name ->
+                showRename = false
+                viewModel.renameFile(name)
+            },
             onDismiss = { showRename = false }
         )
     }
 
     if (showMove) {
-        C139MoveSheet(
+        Pan115MoveSheet(
             viewModel = viewModel,
             onDismiss = { showMove = false }
         )
     }
 
     if (showShare) {
-        C139ShareSheet(
+        Pan115ShareSheet(
             viewModel = viewModel,
             onDismiss = { showShare = false }
         )
@@ -409,31 +420,9 @@ fun C139CloudScreen(
         )
     }
 
-    if (showDeleteConfirm) {
-        val deleting = if (viewModel.multiSelectMode) "选中的 ${viewModel.selected.size} 项" else "「${viewModel.actionFile?.fname ?: ""}」"
-        AlertDialog(
-            onDismissRequest = { showDeleteConfirm = false },
-            title = { Text("删除文件") },
-            text = { Text("确定要删除$deleting 吗？删除后进入回收站。") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showDeleteConfirm = false
-                        if (viewModel.multiSelectMode) viewModel.deleteSelected() else viewModel.deleteFile()
-                    }
-                ) {
-                    Text("删除", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") }
-            }
-        )
-    }
-
     // 新建文件夹：名称校验在弹窗内完成，创建请求交给 ViewModel（窗口内覆盖层）
     if (showCreateFolder) {
-        CloudCreateFolderDialog(
+        Pan115CreateFolderDialog(
             onDismiss = { showCreateFolder = false },
             onConfirm = { name ->
                 showCreateFolder = false
@@ -442,37 +431,114 @@ fun C139CloudScreen(
         )
     }
 
-    // 操作执行中加载弹窗（下载文件夹/批量下载显示进度）
-    if (viewModel.isOperating) {
-        AlertDialog(
-            onDismissRequest = { },
-            confirmButton = { },
-            dismissButton = {
-                TextButton(onClick = { viewModel.cancelDownload() }) {
-                    Text("中断", color = MaterialTheme.colorScheme.error)
-                }
-            },
-            title = { Text("处理中") },
-            text = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = viewModel.folderProgress ?: "正在处理，请稍候…",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
+    // 删除二次确认（窗口内覆盖层）
+    FadeAlertDialog(
+        visible = showDeleteConfirm,
+        onDismissRequest = { showDeleteConfirm = false },
+        title = { Text("删除文件") },
+        text = {
+            val deleting = if (viewModel.multiSelectMode) {
+                "选中的 ${viewModel.selected.size} 项"
+            } else {
+                "「${viewModel.actionFile?.fname ?: ""}」"
             }
-        )
-    }
+            Text("确定要删除$deleting 吗？删除后进入回收站。")
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    showDeleteConfirm = false
+                    if (viewModel.multiSelectMode) viewModel.deleteSelected() else viewModel.deleteFile()
+                }
+            ) {
+                Text("删除", color = MaterialTheme.colorScheme.error)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") }
+        }
+    )
+
+    // 操作执行中加载弹窗（下载文件夹/批量下载显示进度；窗口内覆盖层）
+    FadeAlertDialog(
+        visible = viewModel.isOperating,
+        onDismissRequest = { },
+        title = { Text("处理中") },
+        text = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = viewModel.folderProgress ?: "正在处理，请稍候…",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = { viewModel.cancelDownload() }) {
+                Text("中断", color = MaterialTheme.colorScheme.error)
+            }
+        }
+    )
 }
 
-/** 139 文件操作菜单：下载/分享/移动/重命名/删除 */
+/** 新建文件夹弹窗（窗口内覆盖层，名称本地校验，创建后立即关闭，结果走 cloudMessage 提示） */
+@Composable
+private fun Pan115CreateFolderDialog(
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var touched by remember { mutableStateOf(false) }
+    val error = pan115NameError(name)
+    val showError = touched && error != null
+    FadeAlertDialog(
+        visible = true,
+        onDismissRequest = onDismiss,
+        title = { Text("创建文件夹") },
+        text = {
+            Column {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = {
+                        name = it
+                        touched = true
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("文件夹名称") },
+                    singleLine = true,
+                    isError = showError,
+                    supportingText = {
+                        Text(
+                            text = if (showError) error!! else "创建在当前目录下",
+                            color = if (showError) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                    }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(name.trim()) },
+                enabled = error == null
+            ) { Text("创建") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
+}
+
+/** 115 文件操作菜单：下载/分享/移动/重命名/删除 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun C139ActionSheet(
+private fun Pan115ActionSheet(
     file: ShareFile,
-    viewModel: C139CloudViewModel,
     onDownload: () -> Unit,
     onDownloadFolder: (() -> Unit)? = null,
     onRename: () -> Unit,
@@ -520,20 +586,20 @@ private fun C139ActionSheet(
             HorizontalDivider()
             Spacer(modifier = Modifier.height(8.dp))
             if (!file.isdir) {
-                C139ActionItem(Icons.Outlined.Download, "下载", "使用内置下载功能保存到本机", MaterialTheme.colorScheme.primary, onDownload)
+                Pan115ActionItem(Icons.Outlined.Download, "下载", "使用内置下载功能保存到本机", MaterialTheme.colorScheme.primary, onDownload)
             } else if (onDownloadFolder != null) {
-                C139ActionItem(Icons.Outlined.Download, "下载文件夹", "递归下载整个文件夹，保持目录结构", MaterialTheme.colorScheme.primary, onDownloadFolder)
+                Pan115ActionItem(Icons.Outlined.Download, "下载文件夹", "递归下载整个文件夹，保持目录结构", MaterialTheme.colorScheme.primary, onDownloadFolder)
             }
-            C139ActionItem(Icons.Outlined.Share, "分享", "生成分享链接（自动带提取码）", MaterialTheme.colorScheme.primary, onShare)
-            C139ActionItem(Icons.Outlined.DriveFileMove, "移动到", "移动到网盘的其他目录", MaterialTheme.colorScheme.primary, onMove)
-            C139ActionItem(Icons.Outlined.Edit, "重命名", "修改文件名", MaterialTheme.colorScheme.primary, onRename)
-            C139ActionItem(Icons.Outlined.Delete, "删除", "删除到回收站", MaterialTheme.colorScheme.error, onDelete)
+            Pan115ActionItem(Icons.Outlined.Share, "分享", "生成分享链接（有效期可设，访问码由服务端生成）", MaterialTheme.colorScheme.primary, onShare)
+            Pan115ActionItem(Icons.Outlined.DriveFileMove, "移动到", "移动到网盘的其他目录", MaterialTheme.colorScheme.primary, onMove)
+            Pan115ActionItem(Icons.Outlined.Edit, "重命名", "修改文件名", MaterialTheme.colorScheme.primary, onRename)
+            Pan115ActionItem(Icons.Outlined.Delete, "删除", "删除到回收站", MaterialTheme.colorScheme.error, onDelete)
         }
     }
 }
 
 @Composable
-private fun C139ActionItem(
+private fun Pan115ActionItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     desc: String,
@@ -564,15 +630,16 @@ private fun C139ActionItem(
     }
 }
 
-/** 重命名弹窗 */
+/** 重命名弹窗（窗口内覆盖层） */
 @Composable
-private fun C139RenameDialog(
+private fun Pan115RenameDialog(
     file: ShareFile,
-    viewModel: C139CloudViewModel,
+    onConfirm: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
     var name by remember { mutableStateOf(file.fname) }
-    AlertDialog(
+    FadeAlertDialog(
+        visible = true,
         onDismissRequest = onDismiss,
         title = { Text("重命名") },
         text = {
@@ -588,8 +655,7 @@ private fun C139RenameDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    onDismiss()
-                    if (name.isNotBlank() && name != file.fname) viewModel.renameFile(name.trim())
+                    if (name.isNotBlank() && name != file.fname) onConfirm(name.trim()) else onDismiss()
                 },
                 enabled = name.isNotBlank()
             ) { Text("确定") }
@@ -603,8 +669,8 @@ private fun C139RenameDialog(
 /** 移动目录选择弹窗（独立浏览，不影响主列表） */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun C139MoveSheet(
-    viewModel: C139CloudViewModel,
+private fun Pan115MoveSheet(
+    viewModel: Pan115CloudViewModel,
     onDismiss: () -> Unit
 ) {
     val moveState by viewModel.moveUiState.collectAsState()
@@ -624,32 +690,31 @@ private fun C139MoveSheet(
             Spacer(modifier = Modifier.height(8.dp))
             CrumbBar(
                 rootTitle = "根目录",
-                pathNames = (moveState as? C139CloudUiState.Loaded)?.pathNames ?: emptyList(),
+                pathNames = (moveState as? Pan115CloudUiState.Loaded)?.pathNames ?: emptyList(),
                 onNavigate = { viewModel.moveNavigateToLevel(it) }
             )
             Spacer(modifier = Modifier.height(8.dp))
-            // 返回上一级：固定在目录区上方（不参与 AnimatedContent 过渡，避免与目录内容交叉叠加）
-            if ((moveState as? C139CloudUiState.Loaded)?.pathNames?.isNotEmpty() == true) {
+            if ((moveState as? Pan115CloudUiState.Loaded)?.pathNames?.isNotEmpty() == true) {
                 BackToParentItem(onClick = { viewModel.moveBack() })
                 Spacer(modifier = Modifier.height(4.dp))
             }
             AnimatedContent(
                 targetState = moveState,
                 transitionSpec = { fadeIn(tween(180)) togetherWith fadeOut(tween(140)) },
-                label = "c139MoveState"
+                label = "pan115MoveState"
             ) { s ->
                 when (s) {
-                    is C139CloudUiState.Loading -> Box(
+                    is Pan115CloudUiState.Loading -> Box(
                         modifier = Modifier.fillMaxWidth().height(180.dp),
                         contentAlignment = Alignment.Center
                     ) { CircularProgressIndicator() }
 
-                    is C139CloudUiState.Error -> Box(
+                    is Pan115CloudUiState.Error -> Box(
                         modifier = Modifier.fillMaxWidth().height(140.dp),
                         contentAlignment = Alignment.Center
                     ) { Text(s.message, color = MaterialTheme.colorScheme.onSurfaceVariant) }
 
-                    is C139CloudUiState.Loaded -> {
+                    is Pan115CloudUiState.Loaded -> {
                         val dirs = s.files.filter { it.isdir }
                         if (dirs.isEmpty()) {
                             Box(
@@ -677,10 +742,10 @@ private fun C139MoveSheet(
                 }
             }
             Spacer(modifier = Modifier.height(16.dp))
-            val dirName = (moveState as? C139CloudUiState.Loaded)?.pathNames?.lastOrNull() ?: "根目录"
+            val dirName = (moveState as? Pan115CloudUiState.Loaded)?.pathNames?.lastOrNull() ?: "根目录"
             Button(
                 onClick = {
-                    val to = (moveState as? C139CloudUiState.Loaded)?.dirId ?: "/"
+                    val to = (moveState as? Pan115CloudUiState.Loaded)?.dirId ?: "0"
                     if (viewModel.multiSelectMode) viewModel.moveSelected(to) else viewModel.moveFile(to)
                     onDismiss()
                 },
@@ -694,20 +759,15 @@ private fun C139MoveSheet(
     }
 }
 
-/** 分享设置弹窗（139 提取码系统自动生成，仅选有效期） */
+/** 分享设置弹窗（115 专属有效期档位；访问码由服务端生成） */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun C139ShareSheet(
-    viewModel: C139CloudViewModel,
+private fun Pan115ShareSheet(
+    viewModel: Pan115CloudViewModel,
     onDismiss: () -> Unit
 ) {
-    var period by remember { mutableStateOf<Int?>(null) }
-    val periodOptions = listOf<Pair<String, Int?>>(
-        "永久有效" to null,
-        "1 天" to 1,
-        "7 天" to 7,
-        "30 天" to 30
-    )
+    // 默认选中第一档（115 的档位码是 101..105，不能写死 ShareExpire.FOREVER）
+    var expiredType by remember { mutableStateOf(ShareExpire.PAN115_OPTIONS.first().second) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -722,30 +782,50 @@ private fun C139ShareSheet(
             Text("分享文件", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Medium)
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "提取码由系统自动生成",
+                if (viewModel.multiSelectMode) "已选 ${viewModel.selected.size} 项" else "分享到 115 网盘链接",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "115 的访问码由服务端生成且不可自定义/取消，创建后展示在结果中。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
             Spacer(modifier = Modifier.height(16.dp))
             Text("有效期", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(modifier = Modifier.height(6.dp))
+            // 115 有 5 档（永久/1/3/7/15 天），一行放不下会压扁，换行展示
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                periodOptions.forEach { (name, value) ->
+                ShareExpire.PAN115_OPTIONS.take(3).forEach { (label, value) ->
                     FilterChip(
-                        selected = period == value,
-                        onClick = { period = value },
-                        label = { Text(name) },
+                        selected = expiredType == value,
+                        onClick = { expiredType = value },
+                        label = { Text(label) },
                         colors = FilterChipDefaults.filterChipColors()
                     )
                 }
             }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ShareExpire.PAN115_OPTIONS.drop(3).forEach { (label, value) ->
+                    FilterChip(
+                        selected = expiredType == value,
+                        onClick = { expiredType = value },
+                        label = { Text(label) },
+                        colors = FilterChipDefaults.filterChipColors()
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(20.dp))
             Button(
                 onClick = {
                     if (viewModel.multiSelectMode) {
-                        viewModel.shareSelected(period)
+                        viewModel.shareSelected(expiredType)
                     } else {
-                        viewModel.shareFile(period)
+                        viewModel.shareFile(expiredType)
                     }
                     onDismiss()
                 },

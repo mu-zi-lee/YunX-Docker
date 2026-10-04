@@ -7,6 +7,7 @@ import androidx.lifecycle.viewmodel.CreationExtras
 import kotlin.reflect.KClass
 import com.yunx.app.data.network.BaiduApi
 import com.yunx.app.data.network.C139Api
+import com.yunx.app.data.network.Pan115Api
 import com.yunx.app.data.network.Pan123Api
 import com.yunx.app.data.network.QuarkApi
 import com.yunx.app.data.network.UCApi
@@ -36,7 +37,9 @@ class DriveQuotaViewModel(
     private val c139Api: C139Api,
     private val c139Cookie: suspend () -> String?,
     private val pan123Api: Pan123Api,
-    private val pan123Token: suspend () -> String?
+    private val pan123Token: suspend () -> String?,
+    private val pan115Api: Pan115Api,
+    private val pan115Cookie: suspend () -> String?
 ) : ViewModel() {
 
     private val _quarkQuota = MutableStateFlow<QuotaInfo?>(null)
@@ -56,6 +59,9 @@ class DriveQuotaViewModel(
 
     private val _pan123Quota = MutableStateFlow<QuotaInfo?>(null)
     val pan123Quota: StateFlow<QuotaInfo?> = _pan123Quota.asStateFlow()
+
+    private val _pan115Quota = MutableStateFlow<QuotaInfo?>(null)
+    val pan115Quota: StateFlow<QuotaInfo?> = _pan115Quota.asStateFlow()
 
     /** 是否加载中 */
     val loading = MutableStateFlow(false)
@@ -110,6 +116,13 @@ class DriveQuotaViewModel(
                         _pan123Quota.value = runCatching { pan123Api.getQuota(p123) }.getOrNull()
                     }
                 }
+                // 115
+                launch {
+                    val p115 = pan115Cookie()
+                    if (p115 != null) {
+                        _pan115Quota.value = runCatching { pan115Api.getQuota(p115) }.getOrNull()
+                    }
+                }
             }
             loading.value = false
         }
@@ -129,7 +142,9 @@ class DriveQuotaViewModel(
         private val c139Api: C139Api,
         private val c139Cookie: suspend () -> String?,
         private val pan123Api: Pan123Api,
-        private val pan123Token: suspend () -> String?
+        private val pan123Token: suspend () -> String?,
+        private val pan115Api: Pan115Api,
+        private val pan115Cookie: suspend () -> String?
     ) : ViewModelProvider.Factory {
         @Suppress("UNCHECKED_CAST")
         override fun <T : ViewModel> create(modelClass: KClass<T>, extras: CreationExtras): T =
@@ -139,7 +154,8 @@ class DriveQuotaViewModel(
                 xunleiApi, xunleiToken, xunleiDeviceId, xunleiCaptcha,
                 baiduApi, baiduCookie,
                 c139Api, c139Cookie,
-                pan123Api, pan123Token
+                pan123Api, pan123Token,
+                pan115Api, pan115Cookie
             ) as T
     }
 }

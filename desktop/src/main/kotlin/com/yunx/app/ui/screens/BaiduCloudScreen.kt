@@ -31,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Share
@@ -112,6 +113,8 @@ fun BaiduCloudScreen(
     var showMove by remember { mutableStateOf(false) }
     var showShare by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    // 新建文件夹弹窗（窗口内覆盖层）
+    var showCreateFolder by remember { mutableStateOf(false) }
 
     // 百度非会员 >300MB 限速提示：记住「不再显示」，单文件/批量下载前拦截
     val settingsRepo = remember { SettingsRepository() }
@@ -244,6 +247,14 @@ fun BaiduCloudScreen(
                                                     text = "共 ${s.files.size} 项",
                                                     style = MaterialTheme.typography.bodyMedium,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            // 新建文件夹入口（窗口内覆盖层输入）
+                                            IconButton(onClick = { showCreateFolder = true }) {
+                                                Icon(
+                                                    imageVector = Icons.Outlined.CreateNewFolder,
+                                                    contentDescription = "新建文件夹",
+                                                    tint = MaterialTheme.colorScheme.primary
                                                 )
                                             }
                                         }
@@ -440,6 +451,17 @@ fun BaiduCloudScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") }
+            }
+        )
+    }
+
+    // 新建文件夹：名称校验在弹窗内完成，创建请求交给 ViewModel（窗口内覆盖层）
+    if (showCreateFolder) {
+        CloudCreateFolderDialog(
+            onDismiss = { showCreateFolder = false },
+            onConfirm = { name ->
+                showCreateFolder = false
+                viewModel.createFolder(name)
             }
         )
     }

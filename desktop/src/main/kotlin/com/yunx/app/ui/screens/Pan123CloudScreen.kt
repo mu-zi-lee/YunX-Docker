@@ -31,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Share
@@ -107,6 +108,8 @@ fun Pan123CloudScreen(
     var showMove by remember { mutableStateOf(false) }
     var showShare by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    // 新建文件夹弹窗（窗口内覆盖层）
+    var showCreateFolder by remember { mutableStateOf(false) }
 
     LaunchedEffect(viewModel.cloudMessage) {
         viewModel.cloudMessage?.let {
@@ -223,6 +226,14 @@ fun Pan123CloudScreen(
                                                     text = "共 ${s.files.size} 项",
                                                     style = MaterialTheme.typography.bodyMedium,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                            // 新建文件夹入口（窗口内覆盖层输入）
+                                            IconButton(onClick = { showCreateFolder = true }) {
+                                                Icon(
+                                                    imageVector = Icons.Outlined.CreateNewFolder,
+                                                    contentDescription = "新建文件夹",
+                                                    tint = MaterialTheme.colorScheme.primary
                                                 )
                                             }
                                         }
@@ -388,6 +399,17 @@ fun Pan123CloudScreen(
         Pan123ShareSheet(
             viewModel = viewModel,
             onDismiss = { showShare = false }
+        )
+    }
+
+    // 新建文件夹：名称校验在弹窗内完成，创建请求交给 ViewModel
+    if (showCreateFolder) {
+        CloudCreateFolderDialog(
+            onDismiss = { showCreateFolder = false },
+            onConfirm = { name ->
+                showCreateFolder = false
+                viewModel.createFolder(name)
+            }
         )
     }
 

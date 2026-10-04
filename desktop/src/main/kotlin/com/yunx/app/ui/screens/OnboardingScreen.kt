@@ -1,5 +1,6 @@
 package com.yunx.app.ui.screens
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,11 +14,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Favorite
+import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.OpenInNew
@@ -34,17 +35,21 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.yunx.app.ui.SnackbarController
 import com.yunx.app.util.DesktopActions
+
+/** QQ 交流群群号（桌面端无 mqqapi scheme 保证，点击复制群号供用户在 QQ 中搜索） */
+private const val QQ_GROUP = "635207650"
 
 /**
  * 首次启动引导页：介绍云析（免费）+ 功能特性 + 免责声明。
- * Material3 风格：渐变图标 + 功能列表 + 彩色免费卡 + 免责卡 + 底部主操作。
+ * Material3 风格：应用图标 + 功能列表 + 彩色免费卡 + 免责卡 + 开源仓库 + 底部主操作。
  */
 @Composable
 fun OnboardingScreen(
@@ -63,33 +68,18 @@ fun OnboardingScreen(
                 .padding(start = 24.dp, end = 24.dp, top = 56.dp, bottom = 120.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // ---------- 顶部：渐变图标 + 名称 + 标语 ----------
-            Box(
-                modifier = Modifier
-                    .size(96.dp)
-                    .background(
-                        brush = Brush.linearGradient(
-                            listOf(
-                                MaterialTheme.colorScheme.primary,
-                                MaterialTheme.colorScheme.tertiary
-                            )
-                        ),
-                        shape = RoundedCornerShape(26.dp)
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Link,
-                    contentDescription = "云析图标",
-                    modifier = Modifier.size(48.dp),
-                    tint = MaterialTheme.colorScheme.onPrimary
-                )
-            }
+            // ---------- 顶部：应用图标 + 名称 + 标语 ----------
+            Image(
+                painter = painterResource("about_icon.png"),
+                contentDescription = "云析图标",
+                modifier = Modifier.size(96.dp)
+            )
             Spacer(modifier = Modifier.height(18.dp))
             Text(
                 text = "云析",
                 style = MaterialTheme.typography.headlineLarge,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground
             )
             Spacer(modifier = Modifier.height(6.dp))
             Text(
@@ -104,7 +94,7 @@ fun OnboardingScreen(
             OnboardingFeature(
                 icon = Icons.Outlined.Link,
                 title = "一键解析分享链接",
-                description = "夸克 / UC / 迅雷 / 百度 / 139 / 123 分享链接自动识别，登录网盘账号后即可解析与下载"
+                description = "夸克 / UC / 迅雷 / 百度 / 139 / 123 / 115 分享链接自动识别，登录网盘账号后即可解析与下载"
             )
             OnboardingFeature(
                 icon = Icons.Outlined.Speed,
@@ -202,6 +192,11 @@ fun OnboardingScreen(
             // ---------- 开源仓库 ----------
             GitHubCard()
 
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ---------- QQ 交流群 ----------
+            QQGroupCard()
+
             Spacer(modifier = Modifier.height(8.dp))
         }
 
@@ -258,7 +253,8 @@ private fun OnboardingFeature(
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Medium
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onBackground
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
@@ -276,7 +272,7 @@ private fun OnboardingFeature(
 private fun GitHubCard() {
     Card(
         onClick = {
-            DesktopActions.openUrl("https://github.com/CYQawa/YunX")
+            DesktopActions.openUrl("https://github.com/tidain/YunX-Desktop")
         },
         modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.large,
@@ -307,10 +303,67 @@ private fun GitHubCard() {
                 Text(
                     text = "开源仓库",
                     style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Medium
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onBackground
                 )
                 Text(
-                    text = "github.com/CYQawa/YunX",
+                    text = "github.com/tidain/YunX-Desktop",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                imageVector = Icons.Outlined.OpenInNew,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.outline
+            )
+        }
+    }
+}
+
+/** QQ 交流群入口：点击复制群号（桌面端无 mqqapi scheme 保证，复制后在 QQ 中搜索加群） */
+@Composable
+private fun QQGroupCard() {
+    Card(
+        onClick = {
+            DesktopActions.copyToClipboard(QQ_GROUP)
+            SnackbarController.show("QQ 群号已复制：$QQ_GROUP")
+        },
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                modifier = Modifier.size(40.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Outlined.Forum,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "QQ 交流群",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = "群号：$QQ_GROUP（点击复制）",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -107,6 +107,7 @@ object ClipboardLinkController {
         SharePlatform.BAIDU -> "百度"
         SharePlatform.C139 -> "139"
         SharePlatform.PAN123 -> "123"
+        SharePlatform.PAN115 -> "115"
         SharePlatform.GITHUB -> "GitHub"
     }
 }

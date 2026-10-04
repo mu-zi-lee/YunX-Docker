@@ -57,6 +57,21 @@ data class Pan123AccountEntity(
     val updatedAt: Long = System.currentTimeMillis()
 )
 
+/**
+ * 115 网盘登录凭证（115.com cookie 落库，后续 API 请求携带）。
+ *
+ * 115 的登录态完全由 Cookie 表达（UID/CID/SEID/KID 四个键）：
+ * - `UID` 同时也是提取分享时的 `user_id`（`share/snap` 的请求参数），缺它连分享都打不开；
+ * - `CID`/`SEID`/`KID` 是个人盘与转存接口的鉴权串；
+ * - 下载直链还要求请求头带上这份 Cookie（115 CDN 无 Cookie 会 403）。
+ */
+data class Pan115AccountEntity(
+    val id: String = "pan115",
+    val cookie: String = "",
+    val nickname: String = "",
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
 /** 下载任务（持久化，断点续传依赖 part 文件 + 已下载大小）。 */
 data class DownloadTaskEntity(
     val id: Long = 0,

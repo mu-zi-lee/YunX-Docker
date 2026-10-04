@@ -64,6 +64,7 @@ import com.yunx.app.data.network.C139Api
 import com.yunx.app.data.network.GitHubApi
 import com.yunx.app.data.network.GitHubTokenStore
 import com.yunx.app.data.network.HttpClients
+import com.yunx.app.data.network.Pan115Api
 import com.yunx.app.data.network.Pan123Api
 import com.yunx.app.data.network.QuarkApi
 import com.yunx.app.data.network.TokenCheck
@@ -79,6 +80,8 @@ import com.yunx.app.data.repository.BaiduAccountRepository
 import com.yunx.app.data.repository.BaiduResolveRepository
 import com.yunx.app.data.repository.C139AccountRepository
 import com.yunx.app.data.repository.C139ResolveRepository
+import com.yunx.app.data.repository.Pan115AccountRepository
+import com.yunx.app.data.repository.Pan115ResolveRepository
 import com.yunx.app.data.repository.Pan123AccountRepository
 import com.yunx.app.data.repository.Pan123ResolveRepository
 import com.yunx.app.data.repository.QuarkAccountRepository
@@ -94,6 +97,7 @@ import com.yunx.app.ui.components.FadeAlertDialog
 import com.yunx.app.ui.components.OverlayDialogHost
 import com.yunx.app.ui.login.BaiduLoginScreen
 import com.yunx.app.ui.login.C139LoginScreen
+import com.yunx.app.ui.login.Pan115LoginScreen
 import com.yunx.app.ui.login.Pan123LoginScreen
 import com.yunx.app.ui.login.QuarkLoginScreen
 import com.yunx.app.ui.login.UCLoginScreen
@@ -117,6 +121,8 @@ import com.yunx.app.ui.viewmodel.C139AccountViewModel
 import com.yunx.app.ui.viewmodel.C139CloudViewModel
 import com.yunx.app.ui.viewmodel.DownloadViewModel
 import com.yunx.app.ui.viewmodel.DriveQuotaViewModel
+import com.yunx.app.ui.viewmodel.Pan115AccountViewModel
+import com.yunx.app.ui.viewmodel.Pan115CloudViewModel
 import com.yunx.app.ui.viewmodel.Pan123AccountViewModel
 import com.yunx.app.ui.viewmodel.Pan123CloudViewModel
 import com.yunx.app.ui.viewmodel.QuarkAccountViewModel
@@ -126,6 +132,7 @@ import com.yunx.app.ui.viewmodel.UCAccountViewModel
 import com.yunx.app.ui.viewmodel.UCCoudViewModel
 import com.yunx.app.ui.viewmodel.XunleiAccountViewModel
 import com.yunx.app.ui.viewmodel.XunleiCloudViewModel
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 /**
@@ -157,6 +164,7 @@ fun MainScreen(
     var showBaiduLogin by rememberSaveable { mutableStateOf(false) }
     var showC139Login by rememberSaveable { mutableStateOf(false) }
     var showPan123Login by rememberSaveable { mutableStateOf(false) }
+    var showPan115Login by rememberSaveable { mutableStateOf(false) }
     var showAbout by rememberSaveable { mutableStateOf(false) }
     var showSupport by rememberSaveable { mutableStateOf(false) }
     var showTheme by rememberSaveable { mutableStateOf(false) }
@@ -179,6 +187,7 @@ fun MainScreen(
     val baiduApi = remember { BaiduApi() }
     val c139Api = remember { C139Api() }
     val pan123Api = remember { Pan123Api() }
+    val pan115Api = remember { Pan115Api() }
     val db = remember { AppDatabase.get() }
     val settings = remember { SettingsRepository() }
     // 主页快捷方式开关（实验性功能，默认关闭）：由实验性功能页回调同步，控制解析页是否显示收藏快捷方式
@@ -217,6 +226,9 @@ fun MainScreen(
     val pan123Repository = remember {
         Pan123AccountRepository(db.pan123AccountDao(), pan123Api)
     }
+    val pan115Repository = remember {
+        Pan115AccountRepository(db.pan115AccountDao(), pan115Api)
+    }
     val backupManager = remember {
         AuthBackupManager(
             db.quarkAccountDao(),
@@ -224,7 +236,8 @@ fun MainScreen(
             db.xunleiAccountDao(),
             db.baiduAccountDao(),
             db.c139AccountDao(),
-            db.pan123AccountDao()
+            db.pan123AccountDao(),
+            db.pan115AccountDao()
         )
     }
     val downloadManager = remember {
@@ -299,6 +312,9 @@ fun MainScreen(
     val pan123ViewModel: Pan123AccountViewModel = viewModel(
         factory = Pan123AccountViewModel.Factory(pan123Repository)
     )
+    val pan115ViewModel: Pan115AccountViewModel = viewModel(
+        factory = Pan115AccountViewModel.Factory(pan115Repository)
+    )
     val quarkCloudViewModel: QuarkCloudViewModel = viewModel(
         factory = QuarkCloudViewModel.Factory(
             api,
@@ -351,6 +367,15 @@ fun MainScreen(
             downloadManager
         )
     )
+    val pan115CloudViewModel: Pan115CloudViewModel = viewModel(
+        factory = Pan115CloudViewModel.Factory(
+            pan115Api,
+            { pan115Repository.getAccount()?.cookie },
+            downloadManager,
+            // 登录态从无到有后自动重载根目录（115 登录走内嵌浏览器，登录完成不重启 VM）
+            pan115ViewModel.pan115Account.map { it != null }
+        )
+    )
     val driveQuotaViewModel: DriveQuotaViewModel = viewModel(
         factory = DriveQuotaViewModel.Factory(
             api, { repository.getAccount()?.cookie },
@@ -361,7 +386,8 @@ fun MainScreen(
             { xunleiRepository.getAccount()?.captchaToken },
             baiduApi, { baiduRepository.getAccount()?.cookie },
             c139Api, { c139Repository.getAccount()?.cookie },
-            pan123Api, { pan123Repository.getAccount()?.accessToken }
+            pan123Api, { pan123Repository.getAccount()?.accessToken },
+            pan115Api, { pan115Repository.getAccount()?.cookie }
         )
     )
     val xunleiResolveRepository = remember {
@@ -391,6 +417,9 @@ fun MainScreen(
             tokenProvider = { pan123Repository.getAccount()?.accessToken }
         )
     }
+    val pan115ResolveRepository = remember {
+        Pan115ResolveRepository(pan115Api)
+    }
     val resolveViewModel: ResolveViewModel = viewModel(
         factory = ResolveViewModel.Factory(
             repository,
@@ -405,12 +434,16 @@ fun MainScreen(
             c139ResolveRepository,
             pan123Repository,
             pan123ResolveRepository,
+            pan115Repository,
+            pan115ResolveRepository,
             downloadManager,
             db.bookmarkDao(),
             db.linkHistoryDao(),
             githubApi,
             // GitHub 镜像前缀：用户自定义优先，未配置时用内置默认镜像
-            { settings.githubMirrorPrefix?.ifBlank { null } ?: UpdateChecker.MIRROR_PREFIX }
+            { settings.githubMirrorPrefix?.ifBlank { null } ?: UpdateChecker.MIRROR_PREFIX },
+            // 取链方式开关：设置页「免转存下载」实时生效
+            { settings.quarkNoSaveDownload }
         )
     )
     val downloadViewModel: DownloadViewModel = viewModel(
@@ -427,6 +460,7 @@ fun MainScreen(
     val baiduAccount by baiduViewModel.baiduAccount.collectAsState()
     val c139Account by c139ViewModel.c139Account.collectAsState()
     val pan123Account by pan123ViewModel.pan123Account.collectAsState()
+    val pan115Account by pan115ViewModel.pan115Account.collectAsState()
 
     // 解析页发起下载后，自动切换到「下载」Tab
     LaunchedEffect(resolveViewModel.downloadStarted) {
@@ -536,6 +570,16 @@ fun MainScreen(
         return
     }
 
+    // 115 登录页：全屏覆盖（内嵌浏览器登录抓 Cookie）
+    if (showPan115Login) {
+        Pan115LoginScreen(
+            viewModel = pan115ViewModel,
+            onBack = { showPan115Login = false },
+            onSaved = { showPan115Login = false }
+        )
+        return
+    }
+
     // 折叠标题状态提升到本层：跨页面共享
     val topAppBarState = rememberTopAppBarState()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior(topAppBarState)
@@ -600,6 +644,7 @@ fun MainScreen(
                             c139CloudViewModel,
                             ucCloudViewModel,
                             pan123CloudViewModel,
+                            pan115CloudViewModel,
                             // 主页快捷方式（实验性功能，默认关闭）：复用收藏仓库数据源
                             homeShortcutsEnabled = homeShortcutsEnabled,
                             homeShortcuts = bookmarks,
@@ -613,12 +658,14 @@ fun MainScreen(
                             baiduAccount = baiduAccount,
                             c139Account = c139Account,
                             pan123Account = pan123Account,
+                            pan115Account = pan115Account,
                             quarkCloudViewModel = quarkCloudViewModel,
                             ucCloudViewModel = ucCloudViewModel,
                             xunleiCloudViewModel = xunleiCloudViewModel,
                             baiduCloudViewModel = baiduCloudViewModel,
                             c139CloudViewModel = c139CloudViewModel,
                             pan123CloudViewModel = pan123CloudViewModel,
+                            pan115CloudViewModel = pan115CloudViewModel,
                             driveQuotaViewModel = driveQuotaViewModel,
                             onQuarkLogin = { showQuarkLogin = true },
                             onQuarkLogout = { viewModel.logout() },
@@ -633,6 +680,8 @@ fun MainScreen(
                             onC139Logout = { c139ViewModel.logout() },
                             onPan123Login = { showPan123Login = true },
                             onPan123Logout = { pan123ViewModel.logout() },
+                            onPan115Login = { showPan115Login = true },
+                            onPan115Logout = { pan115ViewModel.logout() },
                             githubHasToken = githubHasTokenState,
                             onGitHubTokenClick = { showGitHubTokenDialog = true },
                             // 已配置 Token 点卡片主体：用 GET /user 取 login，经统一解析入口进入该账号仓库列表

@@ -30,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.CreateNewFolder
 import androidx.compose.material.icons.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
@@ -95,6 +96,8 @@ fun CloudDriveScreen(
     var batchInitial by remember { mutableStateOf(com.yunx.app.ui.screens.BatchStep.MENU) }
     // 批量删除二次确认
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    // 新建文件夹弹窗（窗口内覆盖层）
+    var showCreateFolder by remember { mutableStateOf(false) }
 
     // 操作结果提示（放在本层：弹窗关闭后仍能正常弹出）
     LaunchedEffect(viewModel.cloudMessage) {
@@ -218,6 +221,14 @@ fun CloudDriveScreen(
                                     text = "共 ${s.files.size} 项",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            // 新建文件夹入口（窗口内覆盖层输入）
+                            IconButton(onClick = { showCreateFolder = true }) {
+                                Icon(
+                                    imageVector = Icons.Outlined.CreateNewFolder,
+                                    contentDescription = "新建文件夹",
+                                    tint = MaterialTheme.colorScheme.primary
                                 )
                             }
                         }
@@ -364,6 +375,17 @@ fun CloudDriveScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") }
+            }
+        )
+    }
+
+    // 新建文件夹：名称校验在弹窗内完成，创建请求交给 ViewModel（窗口内覆盖层）
+    if (showCreateFolder) {
+        CloudCreateFolderDialog(
+            onDismiss = { showCreateFolder = false },
+            onConfirm = { name ->
+                showCreateFolder = false
+                viewModel.createFolder(name)
             }
         )
     }

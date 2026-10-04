@@ -74,6 +74,13 @@ class SettingsRepository {
             prefs.putBoolean("notification_show_speed", value)
         }
 
+    /** 夸克取链方式：true=免转存（直接换下载直链，不写入网盘，默认）；false=先转存到临时目录再取链 */
+    var quarkNoSaveDownload: Boolean
+        get() = prefs.getBoolean("quark_no_save_download", true)
+        set(value) {
+            prefs.putBoolean("quark_no_save_download", value)
+        }
+
     /** 后台剪贴板分享链接检测（主窗口失焦时轮询剪贴板，检测到网盘链接弹出提示） */
     var clipboardLinkDetection: Boolean
         get() = prefs.getBoolean("clipboard_link_detection", true)

@@ -80,6 +80,11 @@ object C139Constants {
     /** 重命名 */
     const val FILE_UPDATE_URL = "$CLOUD_BASE/hcy/file/update"
 
+    /**
+     * 新建目录 / 上传预创建（同一个端点，靠 `type` 区分：`folder` = 建目录、`file` = 上传）
+     */
+    const val FILE_CREATE_URL = "$CLOUD_BASE/hcy/file/create"
+
     /** 移动（异步，返回 taskId） */
     const val BATCH_MOVE_URL = "$CLOUD_BASE/hcy/file/batchMove"
 

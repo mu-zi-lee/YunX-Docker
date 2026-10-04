@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.DesktopWindows
+import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.OpenInNew
@@ -52,8 +53,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.yunx.app.ui.BackHandler
+import com.yunx.app.ui.SnackbarController
 import com.yunx.app.data.update.UpdateChecker
 import com.yunx.app.util.DesktopActions
+
+/** QQ 交流群群号（关于页入口；桌面端无 mqqapi scheme 保证，点击复制群号供用户在 QQ 中搜索） */
+private const val QQ_GROUP = "635207650"
 
 /**
  * 关于云析页：应用介绍、支持平台、功能特性、技术栈与免责声明。
@@ -136,6 +141,9 @@ fun AboutScreen(
             GitHubCard()
             Spacer(modifier = Modifier.height(8.dp))
             DesktopRepoCard()
+
+            Spacer(modifier = Modifier.height(8.dp))
+            QQGroupCard()
 
             Spacer(modifier = Modifier.height(8.dp))
             Text(
@@ -221,7 +229,8 @@ private fun PlatformCard() {
         "迅雷网盘" to Icons.Outlined.Speed,
         "百度网盘" to Icons.Outlined.Link,
         "139 网盘" to Icons.Outlined.Cloud,
-        "123云盘" to Icons.Outlined.Cloud
+        "123云盘" to Icons.Outlined.Cloud,
+        "115网盘" to Icons.Outlined.Cloud
     )
     SectionCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -270,7 +279,7 @@ private fun PlatformCard() {
 @Composable
 private fun FeatureCard() {
     val features = listOf(
-        "一键解析分享链接" to "夸克 / UC / 迅雷 / 百度 / 139 / 123 分享直链识别",
+        "一键解析分享链接" to "夸克 / UC / 迅雷 / 百度 / 139 / 123 / 115 分享直链识别",
         "高速分片下载" to "多线程并发 + 断点续传，充分利用带宽",
         "取链即删" to "转存后立即清理，不留残留",
         "凭证本地化" to "Cookie 加密落库，仅存本机"
@@ -560,6 +569,63 @@ private fun DesktopRepoCard() {
                 )
                 Text(
                     text = "github.com/tidain/YunX-Desktop",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Icon(
+                imageVector = Icons.Outlined.OpenInNew,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.outline
+            )
+        }
+    }
+}
+
+/** QQ 交流群入口：点击复制群号（桌面端无 mqqapi scheme 保证，复制后在 QQ 中搜索加群） */
+@Composable
+private fun QQGroupCard() {
+    Card(
+        onClick = {
+            DesktopActions.copyToClipboard(QQ_GROUP)
+            SnackbarController.show("QQ 群号已复制：$QQ_GROUP")
+        },
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                modifier = Modifier.size(40.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Outlined.Forum,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "QQ 交流群",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Text(
+                    text = "群号：$QQ_GROUP（点击复制）",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

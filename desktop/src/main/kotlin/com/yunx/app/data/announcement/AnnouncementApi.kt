@@ -27,6 +27,8 @@ import java.net.URLEncoder
  *
  * 桌面差异：上游 Android 依赖 `network_security_config.xml` 为该域名单独放行明文 HTTP；
  * 桌面 JVM（OkHttp）默认允许明文，无需该配置。日志改走项目自带的 [Log]（替代 android.util.Log）。
+ * 另见 `API-PC.md`：服务端按请求头 `X-Client-Platform` 分流（缺省 / 未知值一律回落手机端），
+ * 电脑端**每个请求都必须带** [CLIENT_PLATFORM_HEADER]，否则会静默拿到手机端公告。
  */
 object AnnouncementApi {
 
@@ -35,6 +37,12 @@ object AnnouncementApi {
      * 与上游保持同一个后端：后端切 HTTPS 时这里同步改即可，桌面无需其它配置。
      */
     const val BASE_URL = "http://yunx.cyqawa.os.kg"
+
+    /** 客户端平台标识请求头：服务端据此只返回「发电脑端」的公告（见 API-PC.md §1） */
+    private const val CLIENT_PLATFORM_HEADER = "X-Client-Platform"
+
+    /** 电脑端标识值；服务端大小写不敏感，写错值不会报错、只会静默回落手机端 */
+    private const val CLIENT_PLATFORM_DESKTOP = "desktop"
 
     /**
      * 列表分页大小 = 接口上限 100。
@@ -120,6 +128,8 @@ object AnnouncementApi {
                     .url(url)
                     .header("Accept", "application/json")
                     .header("User-Agent", "YunX-Desktop")
+                    // 关键：不带这个头服务端按手机端处理，会返回手机端专属公告（见 API-PC.md）
+                    .header(CLIENT_PLATFORM_HEADER, CLIENT_PLATFORM_DESKTOP)
                     .get()
                     .build()
                 HttpClients.apiClient().newCall(call).execute().use { resp ->

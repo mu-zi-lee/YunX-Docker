@@ -202,14 +202,13 @@ private fun AnnouncementDetailContent(
                 if (!cover.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(16.dp))
                     // 封面按图片自身比例、以 [DetailImageMaxWidth] 为宽度上限展示（不占满整行更耐看），
-                    // 高度上限为 maxImageHeight；缩放后若比容器窄则靠左对齐（imageAlignment）
+                    // 高度上限为 maxImageHeight；底框紧贴图片本身（缩放后靠左，见 RemoteImage）
                     RemoteImage(
                         url = cover,
                         contentDescription = null,
                         shape = MaterialTheme.shapes.large,
                         contentScale = ContentScale.Fit,
                         autoHeight = true,
-                        imageAlignment = Alignment.CenterStart,
                         modifier = Modifier
                             .widthIn(max = DetailImageMaxWidth)
                             .heightIn(max = maxImageHeight)
@@ -245,7 +244,6 @@ private fun AnnouncementDetailContent(
                     shape = MaterialTheme.shapes.large,
                     contentScale = ContentScale.Fit,
                     autoHeight = true,
-                    imageAlignment = Alignment.CenterStart,
                     modifier = Modifier
                         .widthIn(max = DetailImageMaxWidth)
                         .padding(top = 12.dp)

@@ -43,6 +43,10 @@ import androidx.compose.ui.unit.dp
  * 最后 `Modifier.size(w, h)` 落一个明确尺寸，图片永远画在框内；加载完成前用 [placeholderRatio] 占位，
  * 避免高度从 0 跳变。
  *
+ * **底框紧贴图片**：高度被上限压缩后图片会等比缩小、比可用宽度窄，此时底框宽度会同步收窄到
+ * 实际绘制宽度（`min(可用宽度, 高度 × 比例)`），不会在窄图两侧留下比图片更宽的底色；
+ * 由于底框即图片本身大小、且父级按起始端对齐，缩小后的图片自然靠左（弹窗与详情页一致）。
+ *
  * 与上游差异：Android `Bitmap` → 桌面 `ImageBitmap`（Skia 解码，见 [RemoteImageLoader]）。
  */
 @Composable
@@ -55,12 +59,7 @@ fun RemoteImage(
     fallback: ImageVector? = null,
     fallbackTint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     autoHeight: Boolean = false,
-    placeholderRatio: Float = 16f / 9f,
-    /**
-     * 图片在容器内的对齐方式。缩放后图比容器小（如受 `heightIn(max)` 限制的竖长图）时，
-     * 默认 [Alignment.Center] 会左右留白居中；传 [Alignment.CenterStart] 可改成靠左。
-     */
-    imageAlignment: Alignment = Alignment.Center
+    placeholderRatio: Float = 16f / 9f
 ) {
     val link = url?.trim().orEmpty()
     var failed by remember(link) { mutableStateOf(false) }
@@ -82,6 +81,8 @@ fun RemoteImage(
     val image = bitmap
 
     if (autoHeight) {
+        // 容器包裹图片本身（不强制撑满可用宽度）：底框宽度 == 实际绘制宽度，
+        // 不会在窄图两侧留下比图片更宽的底色；父级按起始端对齐，缩小后的图自然靠左。
         BoxWithConstraints(modifier = modifier, contentAlignment = Alignment.Center) {
             val ratio = if (image != null && image.height > 0) {
                 image.width.toFloat() / image.height.toFloat()
@@ -95,6 +96,9 @@ fun RemoteImage(
             val natural = if (ratio > 0f) width / ratio else width
             // 调用方可用 heightIn(max = …) 给上限；高度无界时不夹
             val height = if (constraints.hasBoundedHeight) minOf(natural, maxHeight) else natural
+            // 高度被上限压缩后，图片等比缩小、比可用宽度窄：底框宽度收窄到实际绘制宽度；
+            // 未被压缩时 `height * ratio == width`，与原来等价。
+            val frameWidth = if (ratio > 0f) minOf(width, height * ratio) else width
             ImageFrame(
                 image = image,
                 failed = failed,
@@ -103,8 +107,7 @@ fun RemoteImage(
                 contentScale = contentScale,
                 fallback = fallback,
                 fallbackTint = fallbackTint,
-                imageAlignment = imageAlignment,
-                modifier = Modifier.size(width, height)
+                modifier = Modifier.size(frameWidth, height)
             )
         }
         return
@@ -118,7 +121,6 @@ fun RemoteImage(
         contentScale = contentScale,
         fallback = fallback,
         fallbackTint = fallbackTint,
-        imageAlignment = imageAlignment,
         modifier = modifier
     )
 }
@@ -133,7 +135,6 @@ private fun ImageFrame(
     contentScale: ContentScale,
     fallback: ImageVector?,
     fallbackTint: Color,
-    imageAlignment: Alignment,
     modifier: Modifier
 ) {
     Box(
@@ -147,8 +148,7 @@ private fun ImageFrame(
                 bitmap = image,
                 contentDescription = contentDescription,
                 modifier = Modifier.fillMaxSize(),
-                contentScale = contentScale,
-                alignment = imageAlignment
+                contentScale = contentScale
             )
         } else if (failed && fallback != null) {
             Icon(

@@ -600,6 +600,17 @@ private class JdbcDownloadTaskDao(private val conn: Connection) : DownloadTaskDa
         reload()
     }
 
+    override suspend fun updateFileName(id: Long, name: String) = dbIo {
+        synchronized(conn) {
+            conn.prepareStatement("UPDATE download_task SET fileName = ? WHERE id = ?").use { ps ->
+                ps.setString(1, name)
+                ps.setLong(2, id)
+                ps.executeUpdate()
+            }
+        }
+        reload()
+    }
+
     override suspend fun listSyncableEngineTasks(): List<DownloadTaskEntity> = dbIo {
         synchronized(conn) {
             // 还在引擎里跑（未完成、未失败）且带引擎任务 ID 的记录：进度由同步协程逐条轮询回写

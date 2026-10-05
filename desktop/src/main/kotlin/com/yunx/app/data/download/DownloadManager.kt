@@ -479,10 +479,18 @@ class DownloadManager(
          * 注意：必须是最后一个参数（调用点有大量尾随 lambda 用法，放它之后会编译失败）。 */
         onComplete: suspend () -> Unit = {}
     ): Long {
-        // 文件名兜底：空白时从 URL 推导，避免保存时变成时间戳
+        // 磁力链接只能交给 Gopeed 引擎（见 magnetBlockReason）；平台标识同时落库，便于事后区分
+        val isMagnet = MagnetLink.isMagnet(url)
+        val taskPlatform = if (isMagnet) DownloadPlatform.MAGNET else platform
+        // 文件名兜底：空白时从 URL 推导，避免保存时变成时间戳。
+        // 磁力链接走 dn= 里自带的显示名（元数据到手后再换成真正的种子名，见 completeEngineTask）
         val safeName = fileName.ifBlank {
-            url.substringAfterLast('/').substringBefore('?')
-                .ifBlank { "download_${System.currentTimeMillis()}" }
+            if (isMagnet) {
+                MagnetLink.displayName(url)
+            } else {
+                url.substringAfterLast('/').substringBefore('?')
+                    .ifBlank { "download_${System.currentTimeMillis()}" }
+            }
         }
         val effectiveShareUrl = shareUrl.ifBlank { currentShareUrl }
         Log.d(TAG, "enqueue: origin=${LogRedactor.url(url)} fileName=$safeName headers=${headers.keys} size=$size shareUrl=$effectiveShareUrl")
@@ -492,7 +500,7 @@ class DownloadManager(
                     url = url,
                     fileName = safeName,
                     requestHeadersJson = encodeHeaders(headers),
-                    platform = platform,
+                    platform = taskPlatform,
                     shareUrl = effectiveShareUrl
                 )
             )
@@ -506,9 +514,23 @@ class DownloadManager(
         if (size > 0) taskSizes[id] = size
         if (fallbackUrl.isNotBlank()) taskFallbackUrls[id] = fallbackUrl
         taskCallbacks[id] = onComplete
+        // 磁力但引擎不可用：立刻落一条**带原因的失败任务**并结束。若照常走内置下载器，
+        // 它会把 magnet: 当普通 URL 发 HTTP 请求，最后抛一个和「该去导入内核」毫无关系的协议错误。
+        val blocked = magnetBlockReason(isMagnet)
+        if (blocked != null) {
+            Log.w(TAG, "磁力任务被拦下：id=$id 原因=$blocked")
+            taskCallbacks.remove(id)
+            // 不会有下载协程来消费这几份内存数据了，直接清掉
+            taskHeaders.remove(id)
+            taskSizes.remove(id)
+            taskFallbackUrls.remove(id)
+            dao.updateStatus(id, DownloadTaskEntity.STATUS_FAILED)
+            dao.updateError(id, blocked)
+            return id
+        }
         // 引擎分流：选了 Gopeed 且内核已导入时由外部引擎执行（GitHub 除外，见 shouldUseEngine）
-        if (shouldUseEngine(platform)) {
-            startViaEngine(id, url, safeName, headers, platform)
+        if (shouldUseEngine(taskPlatform)) {
+            startViaEngine(id, url, safeName, headers, taskPlatform)
         } else {
             start(id, headers)
         }
@@ -516,14 +538,35 @@ class DownloadManager(
     }
 
     /**
-     * 重新下载：用原直链新建任务（任务卡长按菜单「重新下载」）。
+     * 磁力链接是否可下：返回 null = 可以（交给引擎），否则是给用户看的拦截原因。
+     *
+     * 磁力（BT）只有 Gopeed 内核里有实现（内核注册了 hls/http/bt/ed2k 四个协议），内置分片下载器
+     * 是纯 HTTP Range 实现，喂它 magnet: 只会得到没意义的报错 —— 所以这里宁可拦住并说清楚要做什么。
+     */
+    private fun magnetBlockReason(isMagnet: Boolean): String? {
+        if (!isMagnet) return null
+        if (!GopeedEngine.isInstalled()) {
+            return "磁力下载需要先在「设置 → 下载 → 下载引擎」里导入 Gopeed 内核"
+        }
+        if (!engineEnabledProvider()) {
+            return "磁力下载需要先在「设置 → 下载 → 下载引擎」里把下载引擎切换为 Gopeed"
+        }
+        return null
+    }
+
+    /**
+     * 重新下载：用原直链新建任务（任务卡右键菜单「重新下载」）。
      * 先做 Range 探测校验直链有效性：403/404/网络错误视为直链已过期，返回 false 由 UI 提示。
+     * 磁力链接跳过探测——getTotalSize 是 HTTP Range 探测，喂它 magnet: 必然失败，
+     * 会让「重新下载」永远提示直链失效；磁力直接重新入队，引擎不可用时由 enqueue 的拦截说明原因。
      */
     suspend fun redownload(id: Long): Boolean {
         val task = dao.get(id) ?: return false
         val headers = loadPersistedHeaders(id)
-        val valid = runCatching { downloader.getTotalSize(task.url, headers) != null }.getOrDefault(false)
-        if (!valid) return false
+        if (!MagnetLink.isMagnet(task.url)) {
+            val valid = runCatching { downloader.getTotalSize(task.url, headers) != null }.getOrDefault(false)
+            if (!valid) return false
+        }
         enqueue(task.url, task.fileName, headers, task.totalSize, task.platform)
         return true
     }
@@ -706,6 +749,31 @@ class DownloadManager(
     /** 引擎进度轮询间隔（毫秒）：本地 HTTP 调用，开销极小 */
     private val engineSyncIntervalMs = 1000L
 
+    /**
+     * 上次推送给引擎的「最大同时运行任务数」（maxRunning）。
+     * -1 表示尚未推送过；与 [concurrencyProvider] 当前值不一致时重新推送。
+     * Gopeed 的 maxRunning 会持久化到引擎 bolt 库，所以只需在变化时 PUT 一次。
+     */
+    @Volatile
+    private var lastEngineMaxRunning: Int = -1
+
+    /**
+     * 把设置里的「最大同时下载数」下发给引擎（引擎侧 `maxRunning`），并顺带下发 BT 不做种。
+     *
+     * 引擎内的并发是原生调度：超出上限的任务被置为 `wait` 排队，有任务结束时引擎自己补位。
+     * 但「调大上限」时引擎不会主动放行队列，所以在 [GopeedEngine.applyRuntimeConfig] 里按空位数补唤醒。
+     * 失败不阻断下载（引擎用库里的旧值），只有引擎在跑却拿不到值才算失败。
+     */
+    private suspend fun syncEngineRuntimeConfig() {
+        val desired = concurrencyProvider().coerceAtLeast(1)
+        if (desired == lastEngineMaxRunning) return
+        val applied = runCatching {
+            withContext(Dispatchers.IO) { GopeedEngine.applyRuntimeConfig(desired) }
+        }.onFailure { Log.w(TAG, "下发引擎运行配置失败（并发上限/不做种）：${it.message}") }.getOrNull()
+        // null = 引擎没在跑（下次启动会带上新值）；此时不写缓存，等引擎起来后会重试
+        if (applied != null) lastEngineMaxRunning = applied
+    }
+
     init {
         // 进程重启后接管历史引擎任务：必要时拉起引擎并继续轮询进度
         scope.launch { ensureEngineSync() }
@@ -741,16 +809,21 @@ class DownloadManager(
             base
         }
         val name = safe?.fileName ?: fileName
+        // 磁力（BT）在引擎解析出元数据前没有名字：交给引擎自己命名（真实种子名稍后写回本地记录）；
+        // 连接数是 http 协议的分片并发参数，BT 不吃
+        val isMagnet = platform == DownloadPlatform.MAGNET
         val engineId = try {
             withContext(Dispatchers.IO) {
                 GopeedEngine.start(base)
+                // 在建首个任务前把「最大同时下载数」/不做种推给引擎，让引擎从一开始就按上限排队
+                syncEngineRuntimeConfig()
                 GopeedEngine.createTask(
                     url = url,
                     saveDir = destDir.absolutePath,
-                    fileName = name,
+                    fileName = if (isMagnet) "" else name,
                     headers = headers,
                     // 分片并发沿用按平台的线程数设置（映射到引擎的 extra.connections）
-                    connections = threadProvider(platform),
+                    connections = if (isMagnet) 0 else threadProvider(platform),
                     label = id.toString()
                 )
             }
@@ -837,7 +910,11 @@ class DownloadManager(
                     delay(engineSyncIntervalMs)
                     continue
                 }
+                // 引擎刚拉起：重置缓存，确保 maxRunning 重新推送（bolt 里可能是旧值）
+                lastEngineMaxRunning = -1
             }
+            // 引擎运行中：按需同步「最大同时下载数」（设置变化时 1s 内生效）
+            syncEngineRuntimeConfig()
             for (task in syncable) {
                 val engineId = task.engineTaskId
                 // 内存快判表回填：进程重启后也要能暂停/继续/删除引擎任务
@@ -861,8 +938,17 @@ class DownloadManager(
                         dao.updateStatus(task.id, DownloadTaskEntity.STATUS_PAUSED)
                         finishEngineTask(task.id)
                     }
+                    GopeedEngine.TaskStatus.WAIT -> {
+                        // 超出「最大同时下载任务数」，被引擎排在队列里等空位
+                        // → 本地记成「等待中」。★ 不能落到下面的 else：那会显示成 0% 的「下载中」，看着像卡死。
+                        // 排队期间进度不动、状态也只写一次，避免每秒重复写库触发无谓的 UI 刷新。
+                        if (task.status != DownloadTaskEntity.STATUS_PENDING) {
+                            dao.updateStatus(task.id, DownloadTaskEntity.STATUS_PENDING)
+                        }
+                        _stats.update { it - task.id }
+                    }
                     else -> {
-                        // ready / running / wait 一律视为下载中（与上游口径一致）
+                        // ready / running：真正在传输：更新进度、速度、通知
                         dao.updateProgress(
                             task.id,
                             DownloadTaskEntity.STATUS_DOWNLOADING,
@@ -892,15 +978,32 @@ class DownloadManager(
     /** 引擎侧任务完成：写完成态 + 平均速度，触发清理回调并收尾保活 */
     private suspend fun completeEngineTask(task: DownloadTaskEntity, view: GopeedEngine.TaskView) {
         val total = if (view.total > 0) view.total else task.totalSize
-        val savedPath = engineDestPaths.remove(task.id)
-            ?: File(engineBaseDir(), task.fileName).absolutePath
+        engineDestPaths.remove(task.id)
+        // 磁力（BT）任务的真实名字/落盘结构只有引擎解析完元数据才知道：
+        // 引擎侧用种子名建目录 ⇒ 多文件种子落成 <下载目录>/<种子名>/...，单文件种子落成 <下载目录>/<种子名>。
+        // 本地记录里的 fileName 是元数据到手前自己起的显示名，直接拿它拼路径会指向不存在的文件
+        // （打开文件 / 删除本地文件 / 重新下载全会错）。非磁力任务读一次详情也无害，故不做分支区别对待。
+        val detail = runCatching {
+            withContext(Dispatchers.IO) { GopeedEngine.taskDetail(task.engineTaskId) }
+        }.onFailure { Log.w(TAG, "读取引擎任务详情失败，用本地文件名兜底：id=${task.id} ${it.message}") }.getOrNull()
+        val realName = detail?.name?.takeIf { it.isNotBlank() } ?: task.fileName
+        val savedPath = File(engineBaseDir(), realName).absolutePath
         completeWithAvg(task.id, savedPath, total)
+        if (realName != task.fileName) {
+            // 磁力：把界面上占位的显示名换成真正的种子名（失败只记日志，不影响已完成状态）
+            runCatching { dao.updateFileName(task.id, realName) }
+                .onFailure { Log.w(TAG, "回写种子名失败：id=${task.id} ${it.message}") }
+        }
         taskCallbacks.remove(task.id)?.let { runCatching { it() } }
         taskHeaders.remove(task.id)
         taskSizes.remove(task.id)
         taskFallbackUrls.remove(task.id)
         finishEngineTask(task.id)
-        Log.i(TAG, "引擎任务完成：id=${task.id} path=$savedPath")
+        Log.i(
+            TAG,
+            "引擎任务完成：id=${task.id} path=$savedPath name=$realName " +
+                "files=${detail?.fileCount ?: -1} folder=${detail?.folder ?: false}"
+        )
     }
 
     // ---------- 内部实现 ----------

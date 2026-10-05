@@ -239,7 +239,7 @@ fun SettingsScreen(
         SettingsItem(
             icon = Icons.Outlined.Layers,
             title = "最大同时下载任务数",
-            description = "同时下载 $maxConcurrent 个任务（限制后台并发，避免占满带宽）",
+            description = "同时下载 $maxConcurrent 个任务，超出的排队等待（内置下载器与 Gopeed 引擎共用）",
             onClick = { showConcurrencyDialog = true }
         )
 

@@ -207,7 +207,7 @@
 | 上游提交 | 内容 | 桌面实现与取舍 |
 | --- | --- | --- |
 | `6265668`(#141) | 内置 Gopeed 下载引擎（双下载器并存 + 内核获取） | **引擎进程** `data/gopeed/GopeedEngine.kt`：内核为 `gopeed.exe`，落 `<dataDir>/gopeed/{bin,storage,tmp}`；以 `-A 127.0.0.1 -P <随机空闲端口> -d <storage> --temp-dir <tmp>` 启动，**不设 `-p` 密码 ⇒ 服务端不启用 Web 鉴权、无需 apiToken**；JDK 17 在 Windows 默认以 `CREATE_NO_WINDOW` 创建子进程（仅显式继承 stdio 时才清除），**不会冒出控制台黑窗**，stdout/stderr 重定向到 `gopeed.log`；启动后轮询 `/api/v1/info` 确认就绪（上限 20s）；pid 落文件，启动时按「pid 存活且可执行路径就是本应用内核」精确清理上次强杀留下的孤儿进程（避免它占着 bolt 存储锁）；注册 JVM 关闭钩子，退出应用时停引擎。**API 客户端**：专用 OkHttp 客户端 **`Proxy.NO_PROXY`**（否则用户配了代理时本地请求会被代理走），信封 `{code,msg,data}`，`code != 0` 取 `msg` 抛错；接口与上游一致：`GET /api/v1/info`、`POST /api/v1/tasks`、`GET /api/v1/tasks/{id}/status`、`PUT .../pause`、`PUT .../continue`、`DELETE /api/v1/tasks/{id}`；建任务体 `{"req":{"url","extra":{"header":{…}},"labels":{"yunxTaskId":…}},"opts":{"path","name","extra":{"connections":N}}}`，**`data` 是任务 ID 字符串**（与查询类接口的对象不同）。**内核获取** `GopeedKernelProvisioner`：从 **Gopeed 官方 Release** 取 `gopeed-web-<tag>-windows-{amd64,arm64}.zip`（按 `os.arch` 映射），下载走 `HttpClients.downloadClient`（跟随代理）、镜像前缀复用「GitHub 下载镜像」设置且失败自动回退直连、按 Release 的 `digest` 校验 sha256（长度非 64 则跳过）后解包导入，结束删除临时包；也支持导入本地 `.zip` / `.exe`。**DB/设置**：`download_task` 增 `engineTaskId`（DDL + ALTER 迁移 + `readTask` 容错 + `insert` 16 占位符）、`DownloadTaskDao` 增 `updateEngineTaskId` / `listSyncableEngineTasks`；设置增 `download_engine`（`builtin` 默认 / `gopeed`）。**下载管理** `DownloadManager`：`enqueue` 末尾统一分流（**平台非 GitHub** + 选了 Gopeed + 内核已导入才走引擎，GitHub 因引擎无法镜像回退仍走内置）；`engineTaskId` 非空的任务其 `start`/`pause`/`remove` 分别转发 `continue`/`pause`/`delete`（绝不落到内置下载器重复下载）；1s 轮询 `/status` 回写进度与 `_stats`（`ready/running/wait` 视为下载中、`done` 完成并写平均速度与清理回调、`error` 置失败、`pause` 置暂停），保活与 Windows 通知沿用既有 `onTaskStarted/onTaskFinished`/`notifyProgress`（引用计数保证恰好配对）；落盘目录沿用设置里的自定义下载目录或系统「下载」目录，路径经 `DownloadPathPolicy.sanitize` 净化（防穿越/非法字符）。**UI** `ui/screens/DownloadEngineScreen.kt`：设置 → 「下载引擎」二级页，展示引擎状态 / 内核体积与核心版本 / 落盘目录，提供「从官方下载内核」「导入本地内核」「重启引擎」「更换内核」「删除内核」与引擎切换（切到 Gopeed 前要求内核已导入）；内核下载进度用**窗口内 `FadeAlertDialog`**（按项目约定，且刻意不可取消）；失败原因用 `SelectionContainer` 原文可复制。 |
-| `6265668`(#141) 桌面差异 | Android 专属能力 | **去掉**：AAR 导入与 `System.load`、SAF tree Uri 反解、存储权限三态与「所有文件访问」引导、前台服务保活（桌面由 `WindowsKeepAwake` + 通知中心承担）、`DownloadEngineScreen` 里的「更新内核」入口（需先删后导）。**差异**：引擎不支持的「下载限速 / 失败重试 / 最大同时下载任务数 / GitHub 镜像回退」在桌面仍保留设置项（内置下载器继续使用），已在引擎页与设置项描述里注明「引擎不支持」；引擎内核版本号在官方包名里（`tag`），运行中经 `/api/v1/info` 读取展示。 |
+| `6265668`(#141) 桌面差异 | Android 专属能力 | **去掉**：AAR 导入与 `System.load`、SAF tree Uri 反解、存储权限三态与「所有文件访问」引导、前台服务保活（桌面由 `WindowsKeepAwake` + 通知中心承担）、`DownloadEngineScreen` 里的「更新内核」入口（需先删后导）。**差异**：引擎不支持的「下载限速 / 失败重试 / GitHub 镜像回退」在桌面仍保留设置项（内置下载器继续使用），已在引擎页与设置项描述里注明「引擎不支持」；引擎内核版本号在官方包名里（`tag`），运行中经 `/api/v1/info` 读取展示。（注：「最大同时下载任务数」自 2026-10-05 起引擎已支持，见 §9.8。） |
 
 #### 验证
 
@@ -234,5 +234,32 @@
 
 - `gradle :desktop:compileKotlin` 通过。
 - **未做端到端真机验证**：三个新网盘需真实账号；迅雷网页登录的 JCEF 注入时序、`authType=webToken` 刷新分支、凭据 Cookie 分片拼回均需真机自测。
+
+### 9.8 本次对齐（上游 `a7dbae7`/`43f5073`/`c41ba47`）
+
+本轮覆盖上游 `a7dbae7`(#147) 磁力下载、`43f5073`(#148) 引擎接入最大同时下载数、`c41ba47`(#149) 更新说明清洗装饰。
+
+#### 已移植
+
+| 上游提交 | 内容 | 桌面实现与取舍 |
+| --- | --- | --- |
+| `a7dbae7`(#147) | 磁力链接（BT）下载交给 Gopeed 引擎 | **解析** `data/download/MagnetLink.kt`：逐字节移植上游的纯字符串实现（识别 `magnet:` / 取 `dn` 显示名 / 取 `xt=urn:btih:` info hash；`+` 按字面处理不被当空格），桌面同样不依赖任何 Android API。**分流与拦截** `DownloadManager.enqueue`：识别磁力后平台落 `DownloadPlatform.MAGNET`，`magnetBlockReason()` 在「内核未导入」/「未切到 Gopeed」时**直接落一条带原因的失败任务**（明确提示去「设置 → 下载 → 下载引擎」，而不是把 `magnet:` 当普通 URL 发给内置分片下载器换来一个无关的协议错误）。**建任务**：磁力传 `opts.name=""` 让引擎自己命名、`connections=0`（BT 不吃 http 分片并发）。**完成回写** `completeEngineTask`：补读 `GET /api/v1/tasks/{id}` 的 `meta.res`（新增 `GopeedEngine.taskDetail()`），用真实种子名修正保存路径（多文件种子落 `<下载目录>/<种子名>/...`，单文件种子落 `<下载目录>/<种子名>`）并回写 `fileName`（新增 `DownloadTaskDao.updateFileName`，DB 实现同步）。**重新下载**：磁力跳过 HTTP Range 探测（探测必然失败会让「重新下载」永远提示直链过期）。**删除本地文件** `DownloadSaver.delete`：目标是非空目录时改走 `deleteRecursively()`（`File.delete()` 对非空目录必返回 false ⇒ 勾了「同时删除本地文件」却什么都没删）。**UI** `DownloadScreen`：① 恢复右下角「添加任务」FAB —— 桌面与上游一样存在「FAB 被误删、`showAddDialog` 永远为 false、空状态却还写着『点击右下角按钮』」的死入口，本次一并修复；② 添加对话框接受磁力、文件名可留空并给引擎提示；③ 磁力在元数据到手前 `totalSize=0`，状态行显示「正在解析磁力」而非 0% 卡死。 |
+| `43f5073`(#148) | Gopeed 引擎接入「最大同时下载任务数」（默认 3） | **引擎侧** `GopeedEngine.applyRuntimeConfig(maxRunning, wakeQueued)`：GET 整份 config → 只改顶层 `maxRunning`（以及 `protocolConfig.bt` 的 `seedKeep=false / seedRatio=0 / seedTime=1` 不做种）→ 全量 PUT 回去，其余字段原样保留；Gopeed 启动参数里的 `downloadConfig` **只在空库首次生效**（`Setup()` 读到库里的旧配置会整个替换），所以必须启动后走 REST 写回。**补位唤醒** `wakeQueuedTasks()`：引擎只在「有任务结束」时补一个空位，调大上限时不会放行队列 —— 这里按 `GET /api/v1/tasks` 统计 `running`/`wait`，用空位数逐个 `PUT .../continue` 唤醒排队任务，严格不越过上限、不挤下正在下载的任务；调小时不打断在跑任务。**下载管理** `DownloadManager.syncEngineRuntimeConfig()`：值变化时下发（`lastEngineMaxRunning` 缓存；引擎刚拉起时重置以便重推；引擎没在跑时返回 null 不写缓存，下次重试）；`engineSyncLoop` 每秒按需同步，因此设置页改完 ≤1s 生效。引擎报 `status=wait` 时回写本地「等待中」（`STATUS_PENDING`，不再显示成 0% 的「下载中」）。**默认值** `DEFAULT_MAX_CONCURRENT_DOWNLOADS` 1 → 3（跟随上游；内置下载器与引擎共用同一个值）。**UI** 设置项描述改为「内置下载器与 Gopeed 引擎共用」。 |
+| `c41ba47`(#149) | 更新说明过滤掉纯文本里没用的装饰（头图 / QQ 群徽章） | `UpdateChecker.cleanReleaseNotes()`：只去两类 —— ① capsule-render 的 `<img>` 头图；② QQ 群徽章（带外链与裸图片两种形式，**带外链规则必须排在裸图片规则前**，否则会剩一个空链接）。整行只剩装饰时整行删掉、连续空行压成一个、首尾 trim；`fetchLatestRelease` 解析处清洗一次。桌面更新弹窗同样用纯文本显示正文，收益一致；**未移植**上游的日志字数对比（桌面日志无此需求）。 |
+
+#### 跳过 / 桌面差异
+
+| 上游内容 | 处理 |
+| --- | --- |
+| 上游 `MagnetLink` 里关于 `android.net.Uri` 空壳、JVM 单测的注释 | 桌面无 Android 依赖，注释改为「纯 JVM 便于单测」，实现逐字节一致。 |
+| 上游新增的 `MagnetLinkTest` / `UpdateCheckerNotesTest` | **未移植**：桌面测试源集当前配置损坏（`run.ps1` 用 `:desktop:jar` 而非 `build`，`:desktop:test` 会 `ClassNotFoundException`），加了也跑不起来。待测试源集修复后再补。 |
+| 上游 `DownloadService.notifyResult`（磁力拦截时发失败通知） | 桌面无前台服务；失败原因写入 `dao.updateError`，由下载卡片「失败原因」展示，与桌面既有引擎失败路径一致。 |
+| 上游把「最大同时下载任务数」设置项移出「引擎模式折叠块」 | 桌面设置页本就不折叠该项（无 `engineOn` 包裹），无需改动。 |
+
+#### 验证
+
+- `gradle :desktop:jar` 通过（`run.bat build`）。
+- **未做端到端真机验证**：磁力下载需可用的 Gopeed 内核与可用种子/网络（DHT/tracker）；引擎 `maxRunning` 排队与唤醒需多任务实测；均需联网自测。
+
 
 

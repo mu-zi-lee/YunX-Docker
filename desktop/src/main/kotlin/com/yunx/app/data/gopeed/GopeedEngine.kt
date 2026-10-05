@@ -9,6 +9,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.Proxy
@@ -383,6 +384,136 @@ object GopeedEngine {
     fun deleteTask(engineTaskId: String) {
         requestEnvelope("DELETE", "/api/v1/tasks/$engineTaskId", null)
     }
+
+    /**
+     * 引擎任务详情（`GET /api/v1/tasks/{id}` → `meta.res`）。
+     *
+     * `/status` 只给进度，**不给名字**；而磁力（BT）任务的真实名字是引擎解析出元数据之后才有的，
+     * 落盘位置也随之下发。所以完成磁力任务时必须补读一次详情来修正保存路径与显示名。
+     */
+    data class TaskDetail(
+        /** 资源名：磁力就是种子名（单文件种子=文件名，多文件种子=种子的顶级目录名） */
+        val name: String,
+        /** 文件个数（多文件种子 > 1） */
+        val fileCount: Int,
+        /** 落盘是**目录**（`<下载目录>/<种子名>/...`）还是单个文件（`<下载目录>/<种子名>`） */
+        val folder: Boolean
+    )
+
+    fun taskDetail(id: String): TaskDetail {
+        val data = get("/api/v1/tasks/$id")
+        val res = data.optJSONObject("meta")?.optJSONObject("res")
+        val files = res?.optJSONArray("files")
+        val count = files?.length() ?: 0
+        // 文件带 path ⇒ 种子有自己的根目录（BT 侧 FilePathMaker 返回「种子名/子路径」）；
+        // 只有单个文件且 path 为空时，落盘才是「下载目录/文件名」这一个文件
+        val hasSubPath = (0 until count).any {
+            files?.optJSONObject(it)?.optString("path").orEmpty().isNotBlank()
+        }
+        return TaskDetail(
+            name = res?.optString("name").orEmpty().ifBlank { data.optString("name") },
+            fileCount = count,
+            folder = hasSubPath || count > 1
+        )
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // 全局配置（最大同时运行任务数等）
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * 读取引擎当前全局配置（`GET /api/v1/config` 的 `data` 对象）。
+     * 包含 `downloadDir` / `maxRunning` / `proxy` / `protocolConfig` 等全部字段。
+     */
+    fun getConfig(): JSONObject = get("/api/v1/config")
+
+    /**
+     * 全量写入引擎全局配置（`PUT /api/v1/config`）。
+     * 注意：Gopeed 的 `PutConfig` 是**整体替换**，调用方必须传完整配置对象
+     * （通常先 [getConfig] 再改个别字段后回写，避免冲掉 downloadDir / proxy 等）。
+     */
+    fun putConfig(config: JSONObject) {
+        requestEnvelope("PUT", "/api/v1/config", config.toString())
+    }
+
+    /**
+     * 下发「引擎运行期由应用决定的配置」：并发上限 `maxRunning` + BT 不做种。
+     *
+     * ★ 为什么必须在启动后走 REST 写回：启动参数里的 `downloadConfig` **只在空库首次生效**——
+     *   Gopeed 的 `Downloader.Setup()` 一旦读到 bolt 里存过的配置，就整个替换掉启动配置。
+     *   导入内核后每次冷启动读到的都是库里那份旧值，启动参数里写什么都不算数。
+     *
+     * ★ 只改这两处、其余字段原样带回：GET 到的整份配置直接 PUT 回去，
+     *   `downloadDir` / `proxy` / `trackers` 等仍是库里已有的值，不会被冲掉。
+     *
+     * 并发上限——引擎自己就有多任务调度：超出上限的新任务置为 `wait` 塞进队列，
+     * 有任务结束时引擎自己补位。这里只负责把设置值下发下去（默认曾是 1，等于引擎永远单任务）。
+     *
+     * BT 不做种——Gopeed 的 bt 默认 `seedKeep=false, seedRatio=1.0, seedTime=7200`：
+     * 下载完还会继续上传，直到分享率 1.0 或满 2 小时。桌面同样不希望下完还占带宽。
+     * ★ 坑：`seedRatio=0 && seedTime=0 && seedKeep=false` **不是「关」**——三个停止条件都不成立
+     *   ⇒ 循环永不退出，等于永远做种。真正能立刻停的是 `seedTime=1`（秒）。
+     *
+     * @param maxRunning 最大同时运行任务数，<1 时按 1 处理
+     * @param wakeQueued 是否顺手唤醒在队列里等待的任务（调大上限时需要；引擎自己不会放行队列）
+     * @return 实际下发的上限；引擎未运行时返回 null（下次启动会带上新值）
+     */
+    fun applyRuntimeConfig(maxRunning: Int, wakeQueued: Boolean = true): Int? {
+        if (_state.value != State.RUNNING) return null
+        val value = maxRunning.coerceAtLeast(1)
+        val cfg = getConfig()
+        cfg.put("maxRunning", value)
+        val protocols = cfg.optJSONObject("protocolConfig") ?: JSONObject()
+        val bt = protocols.optJSONObject("bt") ?: JSONObject()
+        bt.put("seedKeep", false)
+        bt.put("seedRatio", 0)
+        bt.put("seedTime", 1)
+        protocols.put("bt", bt)
+        cfg.put("protocolConfig", protocols)
+        putConfig(cfg)
+        if (wakeQueued) wakeQueuedTasks(value)
+        Log.i(TAG, "已下发引擎运行配置：maxRunning=$value BT不做种=$bt")
+        return value
+    }
+
+    /**
+     * 按空位数唤醒引擎里 status=wait 的排队任务。
+     *
+     * ★ 为什么还要自己补位：引擎只在**有任务结束**时补一个空位（`notifyRunning` 每次只放行一个），
+     *   把上限从 3 调到 5 时已排队的任务不会自己动，得由我们按空位数逐个唤醒。
+     *   唤醒用 `PUT /api/v1/tasks/{id}/continue`：对 `wait` 任务等价于「上车」。
+     *   注意 `Continue` 的 `needPauseCount = min(上限, 要继续的数量) - 空位数`，**只有没有空位时才 > 0**
+     *   （那时它会去暂停一个正在跑的任务给新任务让路）——所以这里严格按「空位数」放行，
+     *   绝不越过上限，也就绝不会把正在下载的任务挤下去。
+     *
+     * ★ 调小时不打断已经在跑的任务：它们继续跑完，只是不再补位（引擎的 PutConfig 不做重新平衡）。
+     */
+    private fun wakeQueuedTasks(maxRunning: Int) {
+        val tasks = runCatching { getList("/api/v1/tasks") }.getOrNull() ?: return
+        var running = 0
+        val waiting = ArrayList<String>()
+        for (i in 0 until tasks.length()) {
+            val t = tasks.optJSONObject(i) ?: continue
+            when (t.optString("status")) {
+                TaskStatus.RUNNING -> running++
+                TaskStatus.WAIT -> t.optString("id").takeIf { it.isNotBlank() }?.let { waiting.add(it) }
+            }
+        }
+        var free = maxRunning - running
+        var woken = 0
+        for (id in waiting) {
+            if (free <= 0) break
+            runCatching { continueTask(id) }
+                .onFailure { Log.w(TAG, "唤醒排队任务失败：engineId=$id ${it.message}") }
+            free--
+            woken++
+        }
+        Log.i(TAG, "并发上限已更新：maxRunning=$maxRunning 在跑=$running 排队=${waiting.size} 唤醒=$woken")
+    }
+
+    /** `GET` 列表类接口：`data` 是 JSON 数组（与返回对象的 [get] 区分） */
+    private fun getList(path: String): JSONArray =
+        requestEnvelope("GET", path, null).optJSONArray("data") ?: JSONArray()
 
     /** `GET`：返回信封里的 `data` 对象（查询类接口的 `data` 都是对象） */
     private fun get(path: String): JSONObject =

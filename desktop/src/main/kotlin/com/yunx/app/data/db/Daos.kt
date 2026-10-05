@@ -90,6 +90,8 @@ interface DownloadTaskDao {
     suspend fun delete(id: Long)
     /** 记录外部下载引擎（Gopeed）的任务 ID；空串表示该任务回到内置下载器语义 */
     suspend fun updateEngineTaskId(id: Long, engineTaskId: String)
+    /** 磁力任务完成时把占位显示名换成真正的种子名（种子名要等引擎解析出元数据才有） */
+    suspend fun updateFileName(id: Long, name: String)
     /** 还在外部引擎里执行、需要轮询同步进度的任务（engineTaskId 非空且未完成/未失败） */
     suspend fun listSyncableEngineTasks(): List<DownloadTaskEntity>
 }

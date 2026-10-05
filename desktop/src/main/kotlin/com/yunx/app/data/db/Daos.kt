@@ -55,6 +55,27 @@ interface Pan115AccountDao {
     suspend fun clear()
 }
 
+interface GuangYaAccountDao {
+    fun observeAccount(): Flow<GuangYaAccountEntity?>
+    suspend fun upsert(account: GuangYaAccountEntity)
+    suspend fun getAccount(): GuangYaAccountEntity?
+    suspend fun clear()
+}
+
+interface ILanzouAccountDao {
+    fun observeAccount(): Flow<ILanzouAccountEntity?>
+    suspend fun upsert(account: ILanzouAccountEntity)
+    suspend fun getAccount(): ILanzouAccountEntity?
+    suspend fun clear()
+}
+
+interface LanzouAccountDao {
+    fun observeAccount(): Flow<LanzouAccountEntity?>
+    suspend fun upsert(account: LanzouAccountEntity)
+    suspend fun getAccount(): LanzouAccountEntity?
+    suspend fun clear()
+}
+
 interface DownloadTaskDao {
     fun observeAll(): Flow<List<DownloadTaskEntity>>
     suspend fun insert(task: DownloadTaskEntity): Long

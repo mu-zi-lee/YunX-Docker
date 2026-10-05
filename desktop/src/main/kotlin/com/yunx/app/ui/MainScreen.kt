@@ -68,7 +68,10 @@ import com.yunx.app.data.network.BaiduApi
 import com.yunx.app.data.network.C139Api
 import com.yunx.app.data.network.GitHubApi
 import com.yunx.app.data.network.GitHubTokenStore
+import com.yunx.app.data.network.GuangYaApi
 import com.yunx.app.data.network.HttpClients
+import com.yunx.app.data.network.ILanzouApi
+import com.yunx.app.data.network.LanzouApi
 import com.yunx.app.data.network.Pan115Api
 import com.yunx.app.data.network.Pan123Api
 import com.yunx.app.data.network.QuarkApi
@@ -85,6 +88,12 @@ import com.yunx.app.data.repository.BaiduAccountRepository
 import com.yunx.app.data.repository.BaiduResolveRepository
 import com.yunx.app.data.repository.C139AccountRepository
 import com.yunx.app.data.repository.C139ResolveRepository
+import com.yunx.app.data.repository.GuangYaAccountRepository
+import com.yunx.app.data.repository.GuangYaResolveRepository
+import com.yunx.app.data.repository.ILanzouAccountRepository
+import com.yunx.app.data.repository.ILanzouResolveRepository
+import com.yunx.app.data.repository.LanzouAccountRepository
+import com.yunx.app.data.repository.LanzouResolveRepository
 import com.yunx.app.data.repository.Pan115AccountRepository
 import com.yunx.app.data.repository.Pan115ResolveRepository
 import com.yunx.app.data.repository.Pan123AccountRepository
@@ -102,6 +111,9 @@ import com.yunx.app.ui.components.FadeAlertDialog
 import com.yunx.app.ui.components.OverlayDialogHost
 import com.yunx.app.ui.login.BaiduLoginScreen
 import com.yunx.app.ui.login.C139LoginScreen
+import com.yunx.app.ui.login.GuangYaLoginScreen
+import com.yunx.app.ui.login.ILanzouLoginScreen
+import com.yunx.app.ui.login.LanzouLoginScreen
 import com.yunx.app.ui.login.Pan115LoginScreen
 import com.yunx.app.ui.login.Pan123LoginScreen
 import com.yunx.app.ui.login.QuarkLoginScreen
@@ -131,6 +143,12 @@ import com.yunx.app.ui.viewmodel.C139AccountViewModel
 import com.yunx.app.ui.viewmodel.C139CloudViewModel
 import com.yunx.app.ui.viewmodel.DownloadViewModel
 import com.yunx.app.ui.viewmodel.DriveQuotaViewModel
+import com.yunx.app.ui.viewmodel.GuangYaAccountViewModel
+import com.yunx.app.ui.viewmodel.GuangYaCloudViewModel
+import com.yunx.app.ui.viewmodel.ILanzouAccountViewModel
+import com.yunx.app.ui.viewmodel.ILanzouCloudViewModel
+import com.yunx.app.ui.viewmodel.LanzouAccountViewModel
+import com.yunx.app.ui.viewmodel.LanzouCloudViewModel
 import com.yunx.app.ui.viewmodel.Pan115AccountViewModel
 import com.yunx.app.ui.viewmodel.Pan115CloudViewModel
 import com.yunx.app.ui.viewmodel.Pan123AccountViewModel
@@ -175,6 +193,9 @@ fun MainScreen(
     var showC139Login by rememberSaveable { mutableStateOf(false) }
     var showPan123Login by rememberSaveable { mutableStateOf(false) }
     var showPan115Login by rememberSaveable { mutableStateOf(false) }
+    var showGuangYaLogin by rememberSaveable { mutableStateOf(false) }
+    var showILanzouLogin by rememberSaveable { mutableStateOf(false) }
+    var showLanzouLogin by rememberSaveable { mutableStateOf(false) }
     var showAbout by rememberSaveable { mutableStateOf(false) }
     var showSupport by rememberSaveable { mutableStateOf(false) }
     var showTheme by rememberSaveable { mutableStateOf(false) }
@@ -202,6 +223,9 @@ fun MainScreen(
     val c139Api = remember { C139Api() }
     val pan123Api = remember { Pan123Api() }
     val pan115Api = remember { Pan115Api() }
+    val guangyaApi = remember { GuangYaApi() }
+    val ilanzouApi = remember { ILanzouApi() }
+    val lanzouApi = remember { LanzouApi() }
     val db = remember { AppDatabase.get() }
     val settings = remember { SettingsRepository() }
     // 主页快捷方式开关（实验性功能，默认关闭）：由实验性功能页回调同步，控制解析页是否显示收藏快捷方式
@@ -243,6 +267,18 @@ fun MainScreen(
     val pan115Repository = remember {
         Pan115AccountRepository(db.pan115AccountDao(), pan115Api)
     }
+    val guangyaRepository = remember {
+        GuangYaAccountRepository(db.guangyaAccountDao(), guangyaApi)
+    }
+    val ilanzouRepository = remember {
+        ILanzouAccountRepository(db.ilanzouAccountDao(), ilanzouApi)
+    }
+    val lanzouRepository = remember {
+        LanzouAccountRepository(db.lanzouAccountDao(), lanzouApi)
+    }
+    // 光鸭业务 API 的 did 头需要同步取设备标识：注入账号仓库缓存的 deviceId
+    // （getAccount 是挂起函数，仓库另有非挂起 cachedDeviceId() 供这里同步取用）
+    guangyaApi.deviceIdProvider = { guangyaRepository.cachedDeviceId() }
     val backupManager = remember {
         AuthBackupManager(
             db.quarkAccountDao(),
@@ -251,7 +287,10 @@ fun MainScreen(
             db.baiduAccountDao(),
             db.c139AccountDao(),
             db.pan123AccountDao(),
-            db.pan115AccountDao()
+            db.pan115AccountDao(),
+            db.guangyaAccountDao(),
+            db.ilanzouAccountDao(),
+            db.lanzouAccountDao()
         )
     }
     val downloadManager = remember {
@@ -331,6 +370,15 @@ fun MainScreen(
     val pan115ViewModel: Pan115AccountViewModel = viewModel(
         factory = Pan115AccountViewModel.Factory(pan115Repository)
     )
+    val guangyaViewModel: GuangYaAccountViewModel = viewModel(
+        factory = GuangYaAccountViewModel.Factory(guangyaRepository)
+    )
+    val ilanzouViewModel: ILanzouAccountViewModel = viewModel(
+        factory = ILanzouAccountViewModel.Factory(ilanzouRepository)
+    )
+    val lanzouViewModel: LanzouAccountViewModel = viewModel(
+        factory = LanzouAccountViewModel.Factory(lanzouRepository)
+    )
     val quarkCloudViewModel: QuarkCloudViewModel = viewModel(
         factory = QuarkCloudViewModel.Factory(
             api,
@@ -392,6 +440,31 @@ fun MainScreen(
             pan115ViewModel.pan115Account.map { it != null }
         )
     )
+    val guangyaCloudViewModel: GuangYaCloudViewModel = viewModel(
+        factory = GuangYaCloudViewModel.Factory(
+            guangyaApi,
+            guangyaRepository,
+            downloadManager,
+            // 登录态从无到有后自动重载根目录
+            guangyaViewModel.guangyaAccount.map { it != null }
+        )
+    )
+    val ilanzouCloudViewModel: ILanzouCloudViewModel = viewModel(
+        factory = ILanzouCloudViewModel.Factory(
+            ilanzouApi,
+            ilanzouRepository,
+            downloadManager,
+            ilanzouViewModel.ilanzouAccount.map { it != null }
+        )
+    )
+    val lanzouCloudViewModel: LanzouCloudViewModel = viewModel(
+        factory = LanzouCloudViewModel.Factory(
+            lanzouApi,
+            lanzouRepository,
+            downloadManager,
+            lanzouViewModel.lanzouAccount.map { it != null }
+        )
+    )
     val driveQuotaViewModel: DriveQuotaViewModel = viewModel(
         factory = DriveQuotaViewModel.Factory(
             api, { repository.getAccount()?.cookie },
@@ -403,7 +476,9 @@ fun MainScreen(
             baiduApi, { baiduRepository.getAccount()?.cookie },
             c139Api, { c139Repository.getAccount()?.cookie },
             pan123Api, { pan123Repository.getAccount()?.accessToken },
-            pan115Api, { pan115Repository.getAccount()?.cookie }
+            pan115Api, { pan115Repository.getAccount()?.cookie },
+            guangyaApi, { guangyaRepository.getAccount() },
+            ilanzouApi, { ilanzouRepository.getAccount() }
         )
     )
     val xunleiResolveRepository = remember {
@@ -436,6 +511,18 @@ fun MainScreen(
     val pan115ResolveRepository = remember {
         Pan115ResolveRepository(pan115Api)
     }
+    val guangyaResolveRepository = remember {
+        GuangYaResolveRepository(
+            api = guangyaApi,
+            tokenProvider = { guangyaRepository.ensureAccessToken() }
+        )
+    }
+    val ilanzouResolveRepository = remember {
+        ILanzouResolveRepository(ilanzouApi, ilanzouRepository)
+    }
+    val lanzouResolveRepository = remember {
+        LanzouResolveRepository(lanzouApi)
+    }
     val resolveViewModel: ResolveViewModel = viewModel(
         factory = ResolveViewModel.Factory(
             repository,
@@ -452,6 +539,12 @@ fun MainScreen(
             pan123ResolveRepository,
             pan115Repository,
             pan115ResolveRepository,
+            guangyaRepository,
+            guangyaResolveRepository,
+            ilanzouRepository,
+            ilanzouResolveRepository,
+            lanzouRepository,
+            lanzouResolveRepository,
             downloadManager,
             db.bookmarkDao(),
             db.linkHistoryDao(),
@@ -477,6 +570,9 @@ fun MainScreen(
     val c139Account by c139ViewModel.c139Account.collectAsState()
     val pan123Account by pan123ViewModel.pan123Account.collectAsState()
     val pan115Account by pan115ViewModel.pan115Account.collectAsState()
+    val guangyaAccount by guangyaViewModel.guangyaAccount.collectAsState()
+    val ilanzouAccount by ilanzouViewModel.ilanzouAccount.collectAsState()
+    val lanzouAccount by lanzouViewModel.lanzouAccount.collectAsState()
 
     // 解析页发起下载后，自动切换到「下载」Tab
     LaunchedEffect(resolveViewModel.downloadStarted) {
@@ -592,6 +688,36 @@ fun MainScreen(
             viewModel = pan115ViewModel,
             onBack = { showPan115Login = false },
             onSaved = { showPan115Login = false }
+        )
+        return
+    }
+
+    // 光鸭云盘登录页：全屏覆盖（账号密码 / 短信验证码）
+    if (showGuangYaLogin) {
+        GuangYaLoginScreen(
+            viewModel = guangyaViewModel,
+            onBack = { showGuangYaLogin = false },
+            onSaved = { showGuangYaLogin = false }
+        )
+        return
+    }
+
+    // 蓝奏云优享版登录页：全屏覆盖（账号密码）
+    if (showILanzouLogin) {
+        ILanzouLoginScreen(
+            viewModel = ilanzouViewModel,
+            onBack = { showILanzouLogin = false },
+            onSaved = { showILanzouLogin = false }
+        )
+        return
+    }
+
+    // 蓝奏云登录页：全屏覆盖（账号密码 / 手动 Cookie）
+    if (showLanzouLogin) {
+        LanzouLoginScreen(
+            viewModel = lanzouViewModel,
+            onBack = { showLanzouLogin = false },
+            onSaved = { showLanzouLogin = false }
         )
         return
     }
@@ -713,6 +839,7 @@ fun MainScreen(
                             ucCloudViewModel,
                             pan123CloudViewModel,
                             pan115CloudViewModel,
+                            guangyaCloudViewModel,
                             // 主页快捷方式（实验性功能，默认关闭）：复用收藏仓库数据源
                             homeShortcutsEnabled = homeShortcutsEnabled,
                             homeShortcuts = bookmarks,
@@ -727,6 +854,9 @@ fun MainScreen(
                             c139Account = c139Account,
                             pan123Account = pan123Account,
                             pan115Account = pan115Account,
+                            guangyaAccount = guangyaAccount,
+                            ilanzouAccount = ilanzouAccount,
+                            lanzouAccount = lanzouAccount,
                             quarkCloudViewModel = quarkCloudViewModel,
                             ucCloudViewModel = ucCloudViewModel,
                             xunleiCloudViewModel = xunleiCloudViewModel,
@@ -734,6 +864,9 @@ fun MainScreen(
                             c139CloudViewModel = c139CloudViewModel,
                             pan123CloudViewModel = pan123CloudViewModel,
                             pan115CloudViewModel = pan115CloudViewModel,
+                            guangyaCloudViewModel = guangyaCloudViewModel,
+                            ilanzouCloudViewModel = ilanzouCloudViewModel,
+                            lanzouCloudViewModel = lanzouCloudViewModel,
                             driveQuotaViewModel = driveQuotaViewModel,
                             onQuarkLogin = { showQuarkLogin = true },
                             onQuarkLogout = { viewModel.logout() },
@@ -750,6 +883,12 @@ fun MainScreen(
                             onPan123Logout = { pan123ViewModel.logout() },
                             onPan115Login = { showPan115Login = true },
                             onPan115Logout = { pan115ViewModel.logout() },
+                            onGuangYaLogin = { showGuangYaLogin = true },
+                            onGuangYaLogout = { guangyaViewModel.logout() },
+                            onILanzouLogin = { showILanzouLogin = true },
+                            onILanzouLogout = { ilanzouViewModel.logout() },
+                            onLanzouLogin = { showLanzouLogin = true },
+                            onLanzouLogout = { lanzouViewModel.logout() },
                             githubHasToken = githubHasTokenState,
                             onGitHubTokenClick = { showGitHubTokenDialog = true },
                             // 已配置 Token 点卡片主体：用 GET /user 取 login，经统一解析入口进入该账号仓库列表

@@ -32,6 +32,9 @@ class AppDatabase private constructor(private val conn: Connection) {
     private val rawC139 = JdbcC139AccountDao(conn)
     private val rawPan123 = JdbcPan123AccountDao(conn)
     private val rawPan115 = JdbcPan115AccountDao(conn)
+    private val rawGuangYa = JdbcGuangYaAccountDao(conn)
+    private val rawILanzou = JdbcILanzouAccountDao(conn)
+    private val rawLanzou = JdbcLanzouAccountDao(conn)
     private val rawDownloadTask = JdbcDownloadTaskDao(conn)
     private val rawBookmark = JdbcBookmarkDao(conn)
     private val rawLinkHistory = JdbcLinkHistoryDao(conn)
@@ -43,6 +46,9 @@ class AppDatabase private constructor(private val conn: Connection) {
     fun c139AccountDao(): C139AccountDao = SecureAccountDaos.c139(rawC139, credentialCipher)
     fun pan123AccountDao(): Pan123AccountDao = SecureAccountDaos.pan123(rawPan123, credentialCipher)
     fun pan115AccountDao(): Pan115AccountDao = SecureAccountDaos.pan115(rawPan115, credentialCipher)
+    fun guangyaAccountDao(): GuangYaAccountDao = SecureAccountDaos.guangya(rawGuangYa, credentialCipher)
+    fun ilanzouAccountDao(): ILanzouAccountDao = SecureAccountDaos.ilanzou(rawILanzou, credentialCipher)
+    fun lanzouAccountDao(): LanzouAccountDao = SecureAccountDaos.lanzou(rawLanzou, credentialCipher)
     fun downloadTaskDao(): DownloadTaskDao = rawDownloadTask
     fun bookmarkDao(): BookmarkDao = rawBookmark
     fun linkHistoryDao(): LinkHistoryDao = rawLinkHistory
@@ -128,6 +134,9 @@ class AppDatabase private constructor(private val conn: Connection) {
             "CREATE TABLE IF NOT EXISTS c139_account (id TEXT PRIMARY KEY NOT NULL, cookie TEXT NOT NULL, nickname TEXT NOT NULL, authorization TEXT NOT NULL, updatedAt INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS pan123_account (id TEXT PRIMARY KEY NOT NULL, accessToken TEXT NOT NULL, account TEXT NOT NULL, nickname TEXT NOT NULL, updatedAt INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS pan115_account (id TEXT PRIMARY KEY NOT NULL, cookie TEXT NOT NULL, nickname TEXT NOT NULL, updatedAt INTEGER NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS guangya_account (id TEXT PRIMARY KEY NOT NULL, accessToken TEXT NOT NULL, refreshToken TEXT NOT NULL, deviceId TEXT NOT NULL, deviceSign TEXT NOT NULL, account TEXT NOT NULL, nickname TEXT NOT NULL, updatedAt INTEGER NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS ilanzou_account (id TEXT PRIMARY KEY NOT NULL, appToken TEXT NOT NULL, uuid TEXT NOT NULL, account TEXT NOT NULL, password TEXT NOT NULL, userId TEXT NOT NULL, nickname TEXT NOT NULL, updatedAt INTEGER NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS lanzou_account (id TEXT PRIMARY KEY NOT NULL, cookie TEXT NOT NULL, nickname TEXT NOT NULL, updatedAt INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS download_task (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL, fileName TEXT NOT NULL, totalSize INTEGER NOT NULL, downloadedSize INTEGER NOT NULL, status INTEGER NOT NULL, errorMsg TEXT NOT NULL, savePath TEXT NOT NULL, requestHeadersJson TEXT NOT NULL DEFAULT '{}', chunkCount INTEGER NOT NULL DEFAULT 0, plannedTotalSize INTEGER NOT NULL DEFAULT 0, cleanupId TEXT NOT NULL DEFAULT '', platform TEXT NOT NULL DEFAULT '', shareUrl TEXT NOT NULL DEFAULT '', avgSpeed INTEGER NOT NULL DEFAULT 0, engineTaskId TEXT NOT NULL DEFAULT '', createTime INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS bookmark (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, link TEXT NOT NULL, title TEXT NOT NULL, platform TEXT NOT NULL, pwd TEXT NOT NULL, category TEXT NOT NULL, createTime INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS link_history (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, url TEXT NOT NULL, title TEXT NOT NULL, platform TEXT NOT NULL, pwd TEXT NOT NULL, createTime INTEGER NOT NULL)"
@@ -317,6 +326,77 @@ private class JdbcPan115AccountDao(conn: Connection) : Pan115AccountDao {
     override fun observeAccount(): Flow<Pan115AccountEntity?> = d.state
     override suspend fun upsert(account: Pan115AccountEntity) = dbIo { d.upsert(account) }
     override suspend fun getAccount(): Pan115AccountEntity? = dbIo { d.load() }
+    override suspend fun clear() = dbIo { d.clear() }
+}
+
+private class JdbcGuangYaAccountDao(conn: Connection) : GuangYaAccountDao {
+    private val d = JdbcSingleRowDao(
+        conn, "guangya_account",
+        listOf("id", "accessToken", "refreshToken", "deviceId", "deviceSign", "account", "nickname", "updatedAt"),
+        "guangya",
+        read = { rs ->
+            GuangYaAccountEntity(
+                "guangya", rs.getString("accessToken"), rs.getString("refreshToken"),
+                rs.getString("deviceId"), rs.getString("deviceSign"), rs.getString("account"),
+                rs.getString("nickname"), rs.getLong("updatedAt")
+            )
+        },
+        bind = { ps, a ->
+            ps.setString(1, a.id); ps.setString(2, a.accessToken); ps.setString(3, a.refreshToken)
+            ps.setString(4, a.deviceId); ps.setString(5, a.deviceSign); ps.setString(6, a.account)
+            ps.setString(7, a.nickname); ps.setLong(8, a.updatedAt)
+        }
+    )
+
+    override fun observeAccount(): Flow<GuangYaAccountEntity?> = d.state
+    override suspend fun upsert(account: GuangYaAccountEntity) = dbIo { d.upsert(account) }
+    override suspend fun getAccount(): GuangYaAccountEntity? = dbIo { d.load() }
+    override suspend fun clear() = dbIo { d.clear() }
+}
+
+private class JdbcILanzouAccountDao(conn: Connection) : ILanzouAccountDao {
+    private val d = JdbcSingleRowDao(
+        conn, "ilanzou_account",
+        listOf("id", "appToken", "uuid", "account", "password", "userId", "nickname", "updatedAt"),
+        "ilanzou",
+        read = { rs ->
+            ILanzouAccountEntity(
+                "ilanzou", rs.getString("appToken"), rs.getString("uuid"), rs.getString("account"),
+                rs.getString("password"), rs.getString("userId"), rs.getString("nickname"),
+                rs.getLong("updatedAt")
+            )
+        },
+        bind = { ps, a ->
+            ps.setString(1, a.id); ps.setString(2, a.appToken); ps.setString(3, a.uuid)
+            ps.setString(4, a.account); ps.setString(5, a.password); ps.setString(6, a.userId)
+            ps.setString(7, a.nickname); ps.setLong(8, a.updatedAt)
+        }
+    )
+
+    override fun observeAccount(): Flow<ILanzouAccountEntity?> = d.state
+    override suspend fun upsert(account: ILanzouAccountEntity) = dbIo { d.upsert(account) }
+    override suspend fun getAccount(): ILanzouAccountEntity? = dbIo { d.load() }
+    override suspend fun clear() = dbIo { d.clear() }
+}
+
+private class JdbcLanzouAccountDao(conn: Connection) : LanzouAccountDao {
+    private val d = JdbcSingleRowDao(
+        conn, "lanzou_account", listOf("id", "cookie", "nickname", "updatedAt"), "lanzou",
+        read = { rs ->
+            LanzouAccountEntity(
+                "lanzou", rs.getString("cookie"),
+                rs.getString("nickname"), rs.getLong("updatedAt")
+            )
+        },
+        bind = { ps, a ->
+            ps.setString(1, a.id); ps.setString(2, a.cookie)
+            ps.setString(3, a.nickname); ps.setLong(4, a.updatedAt)
+        }
+    )
+
+    override fun observeAccount(): Flow<LanzouAccountEntity?> = d.state
+    override suspend fun upsert(account: LanzouAccountEntity) = dbIo { d.upsert(account) }
+    override suspend fun getAccount(): LanzouAccountEntity? = dbIo { d.load() }
     override suspend fun clear() = dbIo { d.clear() }
 }
 

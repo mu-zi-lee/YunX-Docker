@@ -591,7 +591,7 @@ internal fun ShareResultDialog(
 ) {
     // Dialog 内提示宿主（AlertDialog 为独立窗口）
     val snackbarHostState = rememberGlobalSnackbarHostState()
-    // 拼接分享文案（按平台区分：139 / 123 / UC / 迅雷 / 百度 / 夸克）
+    // 拼接分享文案（按平台区分：139 / 123 / UC / 迅雷 / 百度 / 115 / 光鸭 / 蓝奏系 / 夸克）
     val platformName = when {
         info.shareUrl.contains("139.com") -> "139网盘"
         info.shareUrl.contains("123pan") || info.shareUrl.contains("123865") -> "123云盘"
@@ -599,6 +599,10 @@ internal fun ShareResultDialog(
         info.shareUrl.contains("xunlei.com") -> "迅雷网盘"
         info.shareUrl.contains("baidu.com") -> "百度网盘"
         info.shareUrl.contains("115") -> "115网盘"
+        info.shareUrl.contains("guangyapan") -> "光鸭云盘"
+        // 注意：ilanzou 域名里含 "lanzou"，必须先判优享版再判蓝奏云
+        info.shareUrl.contains("ilanzou") -> "蓝奏云优享版"
+        info.shareUrl.contains("lanzou") -> "蓝奏云"
         else -> "夸克网盘"
     }
     val shareText = buildString {

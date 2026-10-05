@@ -94,7 +94,7 @@ fun OnboardingScreen(
             OnboardingFeature(
                 icon = Icons.Outlined.Link,
                 title = "一键解析分享链接",
-                description = "夸克 / UC / 迅雷 / 百度 / 139 / 123 / 115 分享链接自动识别，登录网盘账号后即可解析与下载"
+                description = "夸克 / UC / 迅雷 / 百度 / 139 / 123 / 115 / 光鸭 / 蓝奏云 / 蓝奏云优享版 分享链接自动识别，登录网盘账号后即可解析与下载"
             )
             OnboardingFeature(
                 icon = Icons.Outlined.Speed,

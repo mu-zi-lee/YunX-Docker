@@ -101,6 +101,9 @@ private val threadPlatforms = listOf(
     ThreadPlatform(DownloadPlatform.C139, "139 网盘"),
     ThreadPlatform(DownloadPlatform.PAN123, "123 云盘"),
     ThreadPlatform(DownloadPlatform.PAN115, "115 网盘"),
+    ThreadPlatform(DownloadPlatform.GUANGYA, "光鸭云盘"),
+    ThreadPlatform(DownloadPlatform.ILANZOU, "蓝奏云优享版"),
+    ThreadPlatform(DownloadPlatform.LANZOU, "蓝奏云"),
 )
 
 /**

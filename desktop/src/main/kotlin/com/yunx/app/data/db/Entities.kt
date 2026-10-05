@@ -72,6 +72,38 @@ data class Pan115AccountEntity(
     val updatedAt: Long = System.currentTimeMillis()
 )
 
+/** 光鸭云盘登录凭证（accessToken / refreshToken / 设备标识落库，接口鉴权与设备校验用）。 */
+data class GuangYaAccountEntity(
+    val id: String = "guangya",
+    val accessToken: String = "",
+    val refreshToken: String = "",
+    val deviceId: String = "",
+    val deviceSign: String = "",
+    val account: String = "",
+    val nickname: String = "",
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+/** 蓝奏云优享版登录凭证（appToken 鉴权；账号密码用于重新登录）。 */
+data class ILanzouAccountEntity(
+    val id: String = "ilanzou",
+    val appToken: String = "",
+    val uuid: String = "",
+    val account: String = "",
+    val password: String = "",
+    val userId: String = "",
+    val nickname: String = "",
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+/** 蓝奏云登录凭证（cookie 落库，后续接口请求携带）。 */
+data class LanzouAccountEntity(
+    val id: String = "lanzou",
+    val cookie: String = "",
+    val nickname: String = "",
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
 /** 下载任务（持久化，断点续传依赖 part 文件 + 已下载大小）。 */
 data class DownloadTaskEntity(
     val id: Long = 0,

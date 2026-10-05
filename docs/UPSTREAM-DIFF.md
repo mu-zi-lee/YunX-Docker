@@ -177,4 +177,23 @@
 | --- | --- |
 | 无 | 本次提交内容全部适用，无跳过项。 |
 
+### 9.5 本次对齐（上游 `989a6d7`）
+
+本轮覆盖上游 `561dd10`(#138) / `6265668`(#141) / `989a6d7`(#142)。
+
+#### 已移植
+
+| 上游提交 | 内容 | 桌面实现与取舍 |
+| --- | --- | --- |
+| `989a6d7`(#142) | 应用内公告系统（远程列表 / 启动弹窗 / 未读角标） | **数据层**：`data/announcement/AnnouncementApi`（列表 / 详情两接口；成功与否看响应体 `success`；不轮询；详情按 id 缓存）、`AnnouncementReadStore`（已读口径完全本地维护，打开详情 / 关弹窗都算已读）、`AnnouncementTime`（ISO 8601 → 本地时间，逐行一致）。**桌面适配**：日志 `android.util.Log` → 项目自带 `Log`；`SharedPreferences` → `java.util.prefs`（节点 `yunx/announcement`，仍存 JSON 数组、最多 500 条）；`User-Agent` 改 `YunX-Desktop`；上游 `network_security_config.xml` 的明文放行在桌面 JVM 下不需要（去掉了对应注释与依赖）。**ViewModel**：`AnnouncementViewModel`（列表唯一真源 / 详情会话内缓存 / 未读数 / 启动弹窗候选口径与上游一致）；`Factory` 适配桌面 lifecycle 的 `create(KClass, CreationExtras)` 签名；`SnackbarController` 与上游同名同语义。**图片**：新增 `RemoteImageLoader`（Skia `Image.makeFromEncoded` 解码 + 128 张 LRU + `Semaphore(4)` + 进行中去重 + GitHub 镜像；SVG 直接跳过，与上游 BitmapFactory 取舍一致）与 `RemoteImage`（`ImageBitmap` 版，`autoHeight` 自算宽高比占位）。**UI**：`AnnouncementScreen`（列表 ↔ 详情，`AnimatedContent` 淡入淡出）、`AnnouncementListPage`（首屏 / 错误 / 空态；刷新走顶栏按钮）、`AnnouncementDetailPage`（正文复用 GFM 渲染器 + 自研 `GitHubMarkdownImageTransformer`）、`AnnouncementPopupDialog`（**窗口内 `FadeAlertDialog`**，非 material3 AlertDialog）、`AnnouncementUnreadBadge`。**MainScreen**：顶栏 `Campaign` 图标（所有 Tab 可见）+ 未读角标（画在 `IconButton` 外层 48dp Box，避免被 IconButton 的圆形裁剪切掉）+ 公告覆盖页 + 启动弹窗。 |
+| `989a6d7`(#142) 桌面取舍 | 共享元素过渡 / 下拉刷新 | **未移植共享元素**：上游用 `SharedTransitionLayout` + `sharedBounds` 做「列表项长成整页 / 图标长成整页」；桌面 `MainScreen` 没有共享元素基础设施（全部叠加页统一 `AnimatedVisibility` 淡入淡出），本页随全站约定改用 `AnimatedContent` 淡入淡出，不额外引入共享元素作用域。**未移植下拉刷新**：桌面无该交互，刷新改为顶栏按钮（`PullToRefreshBox` 亦为 AndroidX 依赖）。**图片缓存不共用**：上游把 Markdown 内嵌图与普通图片合到同一个 `RemoteImageLoader`；桌面 `GitHubMarkdownImageTransformer` 另有 SVG 光栅化 / `<text>` 补绘 / HTML 尺寸标记等渲染器适配，拆分会牵动既有 README 渲染链路，故二者各自持 LRU（同图跨场景重复加载极少）。 |
+
+#### 跳过
+
+| 上游提交/内容 | 原因 |
+| --- | --- |
+| `561dd10`(#138) README contributors | 上游仓库 README 专属章节；桌面 README 独立维护。 |
+| `6265668`(#141) 内置 Gopeed 下载引擎 | Android 专属：依赖 gomobile 编译的 `libgojni.so`（AAR 导入 + `System.load`）、SAF tree Uri 反解真实路径、前台服务保活、`DownloadEngineScreen` 引擎页、`StorageDirs`/`PermissionState`。桌面已有自研分片下载引擎（Range 并发 / 断点续传 / 自适应分片）与原生下载目录选择，无对应形态。 |
+| `6265668`(#141) `UpdateChecker` 仓库参数化 / Asset size·digest | 为 Gopeed 内核仓库（`CYQawa/yunx_gopeed_build`）服务；桌面更新检测只针对本项目 Release，无第二仓库需求。 |
+
 

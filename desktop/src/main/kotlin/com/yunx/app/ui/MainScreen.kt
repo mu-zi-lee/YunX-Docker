@@ -18,8 +18,11 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Bookmarks
+import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -55,6 +58,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yunx.app.AppContext
+import com.yunx.app.data.announcement.AnnouncementReadStore
 import com.yunx.app.data.backup.AuthBackupManager
 import com.yunx.app.data.db.AppDatabase
 import com.yunx.app.data.download.ChunkDownloader
@@ -105,6 +109,9 @@ import com.yunx.app.ui.login.XunleiLoginScreen
 import com.yunx.app.ui.login.XunleiVerifyWebViewScreen
 import com.yunx.app.ui.navigation.MainTab
 import com.yunx.app.ui.screens.AboutScreen
+import com.yunx.app.ui.screens.AnnouncementPopupDialog
+import com.yunx.app.ui.screens.AnnouncementScreen
+import com.yunx.app.ui.screens.AnnouncementUnreadBadge
 import com.yunx.app.ui.screens.BookmarkScreen
 import com.yunx.app.ui.screens.DownloadScreen
 import com.yunx.app.ui.screens.DriveScreen
@@ -114,6 +121,7 @@ import com.yunx.app.ui.screens.ResolveScreen
 import com.yunx.app.ui.screens.SettingsScreen
 import com.yunx.app.ui.screens.SupportScreen
 import com.yunx.app.ui.screens.ThemeScreen
+import com.yunx.app.ui.viewmodel.AnnouncementViewModel
 import com.yunx.app.ui.viewmodel.BaiduAccountViewModel
 import com.yunx.app.ui.viewmodel.BaiduCloudViewModel
 import com.yunx.app.ui.viewmodel.BookmarkViewModel
@@ -170,6 +178,9 @@ fun MainScreen(
     var showTheme by rememberSaveable { mutableStateOf(false) }
     var showBookmarks by rememberSaveable { mutableStateOf(false) }
     var showExperimental by rememberSaveable { mutableStateOf(false) }
+    var showAnnouncements by rememberSaveable { mutableStateOf(false) }
+    /** 启动公告弹窗点「查看详情」时带进去的公告 id（null = 从图标进来先看列表） */
+    var announcementDetailId by rememberSaveable { mutableStateOf<String?>(null) }
     val saveableStateHolder = rememberSaveableStateHolder()
 
     val scope = rememberCoroutineScope()
@@ -587,6 +598,21 @@ fun MainScreen(
     // 全局 Snackbar 宿主
     val snackbarHostState = rememberGlobalSnackbarHostState()
 
+    /**
+     * 应用内公告：顶栏红点角标 + 启动弹窗。
+     *
+     * 启动检查（[AnnouncementViewModel.checkStartup]）整个会话只跑一次：一次列表请求同时决定
+     * 「角标数字」与「弹窗展示哪一条」—— 有未读的置顶公告就弹它，否则弹最新的一条未读，全读完则不弹。
+     * 失败静默（与更新检查同一口径），用户点进公告页时会再拉一次并把错误显示出来。
+     */
+    val announcementReadStore = remember { AnnouncementReadStore() }
+    val announcementViewModel: AnnouncementViewModel = viewModel(
+        factory = AnnouncementViewModel.Factory(announcementReadStore)
+    )
+    val unreadAnnouncementCount by announcementViewModel.unreadCount.collectAsState()
+    val popupAnnouncement by announcementViewModel.popup.collectAsState()
+    LaunchedEffect(Unit) { announcementViewModel.checkStartup() }
+
     // 主框架与全屏覆盖层（关于页等）放在同一 Box：覆盖层带过渡动画
     Box(modifier = Modifier.fillMaxSize()) {
         // 根部提供主题内容色：M3 的 LocalContentColor 默认是 Color.Black（不随主题翻转），
@@ -604,6 +630,40 @@ fun MainScreen(
                     )
                 },
                 actions = {
+                    // 公告入口：所有 Tab 都显示（收藏只在解析页出现，公告是全局入口）。
+                    // 角标画在 IconButton 外面（外层再套一个 48dp 的 Box）：material3 的 IconButton
+                    // 内部带 .clip(CircleShape)，角标超出那颗圆会被切掉；外层 Box 同为 48dp 且不裁剪，
+                    // 点击事件照旧落到 IconButton。
+                    Box(
+                        modifier = Modifier.size(48.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        IconButton(
+                            onClick = {
+                                // 从图标进 = 先看列表（清掉上次「查看详情」直接进详情的请求）
+                                announcementDetailId = null
+                                showAnnouncements = true
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Campaign,
+                                contentDescription = if (unreadAnnouncementCount > 0) {
+                                    "公告（$unreadAnnouncementCount 条未读）"
+                                } else {
+                                    "公告"
+                                }
+                            )
+                        }
+                        // 未读红点角标：只有主界面显示（公告页自己开着的时候不显示）
+                        if (unreadAnnouncementCount > 0 && !showAnnouncements) {
+                            AnnouncementUnreadBadge(
+                                count = unreadAnnouncementCount,
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .offset(x = (-6).dp, y = 2.dp)
+                            )
+                        }
+                    }
                     // 解析页标题右上角：收藏网盘链接入口
                     if (currentTab == MainTab.Resolve) {
                         IconButton(onClick = { showBookmarks = true }) {
@@ -827,6 +887,21 @@ fun MainScreen(
             )
         }
 
+        // 应用内公告：叠加覆盖层（列表 ↔ 详情在页面内部切换）
+        AnimatedVisibility(
+            visible = showAnnouncements,
+            enter = fadeIn(tween(220)) + scaleIn(tween(220), initialScale = 0.96f),
+            exit = fadeOut(tween(160)) + scaleOut(tween(160), targetScale = 0.96f),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            AnnouncementScreen(
+                viewModel = announcementViewModel,
+                onBack = { showAnnouncements = false },
+                // 启动弹窗点了「查看详情」就直接落在详情页
+                initialDetailId = announcementDetailId
+            )
+        }
+
         // 全局弹窗覆盖层（FadeAlertDialog）：窗口内直接绘制，零原生窗口开销。
         // 放在根部最后 → 绘制在所有内容（含全屏覆盖层）之上。
         OverlayDialogHost()
@@ -971,6 +1046,19 @@ fun MainScreen(
                 dismissButton = {
                     TextButton(onClick = { showGitHubClearConfirm = false }) { Text("取消") }
                 }
+            )
+        }
+
+        // 启动公告弹窗：展示未读的置顶公告（没有则最新未读）。两个出口都算已读，见 AnnouncementViewModel.consumePopup
+        popupAnnouncement?.let { announcement ->
+            AnnouncementPopupDialog(
+                announcement = announcement,
+                onDetail = {
+                    announcementDetailId = announcement.id
+                    showAnnouncements = true
+                    announcementViewModel.consumePopup()
+                },
+                onDismiss = { announcementViewModel.consumePopup() }
             )
         }
 

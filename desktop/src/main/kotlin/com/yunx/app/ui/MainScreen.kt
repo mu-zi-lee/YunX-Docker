@@ -136,6 +136,7 @@ import com.yunx.app.ui.screens.ResolveScreen
 import com.yunx.app.ui.screens.SettingsScreen
 import com.yunx.app.ui.screens.SupportScreen
 import com.yunx.app.ui.screens.ThemeScreen
+import com.yunx.app.ui.screens.UpdateDialog
 import com.yunx.app.ui.viewmodel.AnnouncementViewModel
 import com.yunx.app.ui.viewmodel.BaiduAccountViewModel
 import com.yunx.app.ui.viewmodel.BaiduCloudViewModel
@@ -207,6 +208,8 @@ fun MainScreen(
     var showAnnouncements by rememberSaveable { mutableStateOf(false) }
     /** 启动公告弹窗点「查看详情」时带进去的公告 id（null = 从图标进来先看列表） */
     var announcementDetailId by rememberSaveable { mutableStateOf<String?>(null) }
+    /** 启动自动检查更新：发现新版本且未被用户忽略时非空 → 弹更新弹窗（见下方启动检查） */
+    var startupUpdateRelease by remember { mutableStateOf<UpdateChecker.Release?>(null) }
     val saveableStateHolder = rememberSaveableStateHolder()
 
     val scope = rememberCoroutineScope()
@@ -767,6 +770,23 @@ fun MainScreen(
     // 启动时同步一次「Gopeed 内核是否已导入」（进程内状态与磁盘事实对齐，供引擎页与分流判断使用）
     LaunchedEffect(Unit) { GopeedEngine.syncInstalledState() }
 
+    /**
+     * 启动自动检查更新（整个会话只跑一次）。
+     * 静默口径：网络失败 / 已是最新 / 用户点过「忽略本次」的版本 都不打扰；
+     * 只有确实有更新的版本才把 [startupUpdateRelease] 置上，由根部的更新弹窗展示。
+     * 「忽略本次」写入的 `ignored_version` 与设置页手动检查时是同一个键。
+     */
+    LaunchedEffect(Unit) {
+        val release = runCatching {
+            UpdateChecker.fetchLatestRelease(settings.acceptPrereleaseUpdate)
+        }.getOrNull() ?: return@LaunchedEffect
+        if (UpdateChecker.compareVersions(release.tagName, UpdateChecker.currentVersion()) <= 0) {
+            return@LaunchedEffect
+        }
+        if (AppContext.miscPrefs.get("ignored_version", null) == release.tagName) return@LaunchedEffect
+        startupUpdateRelease = release
+    }
+
     // 主框架与全屏覆盖层（关于页等）放在同一 Box：覆盖层带过渡动画
     Box(modifier = Modifier.fillMaxSize()) {
         // 根部提供主题内容色：M3 的 LocalContentColor 默认是 Color.Black（不随主题翻转），
@@ -1238,6 +1258,43 @@ fun MainScreen(
                 },
                 onDismiss = { announcementViewModel.consumePopup() }
             )
+        }
+
+        // 启动更新弹窗：与公告弹窗互斥（公告优先），避免两个覆盖层叠在一起看不清
+        if (popupAnnouncement == null) {
+            startupUpdateRelease?.let { release ->
+                UpdateDialog(
+                    currentVersion = UpdateChecker.currentVersion(),
+                    release = release,
+                    // 下载走应用内置下载器（与设置页手动检查更新同一条路径），完成后切到下载页看进度
+                    onDownloadAsset = { url, name ->
+                        startupUpdateRelease = null
+                        scope.launch {
+                            downloadManager.enqueue(url = url, fileName = name)
+                            currentTab = MainTab.Download
+                        }
+                    },
+                    // 镜像站下载：用设置里的自定义镜像前缀（未配置则用默认），GitHub 直连作为失败回退
+                    onDownloadMirrorAsset = { url, name ->
+                        startupUpdateRelease = null
+                        val prefix = settings.githubMirrorPrefix?.ifBlank { null } ?: UpdateChecker.MIRROR_PREFIX
+                        scope.launch {
+                            downloadManager.enqueue(
+                                url = UpdateChecker.mirrorUrl(url, prefix),
+                                fileName = name,
+                                fallbackUrl = url
+                            )
+                            currentTab = MainTab.Download
+                        }
+                    },
+                    onLater = { startupUpdateRelease = null },
+                    onIgnore = {
+                        // 与设置页「忽略本次」同一个键：下次启动不再为这个版本弹窗
+                        AppContext.miscPrefs.put("ignored_version", release.tagName)
+                        startupUpdateRelease = null
+                    }
+                )
+            }
         }
 
         // 剪贴板分享链接检测器：主窗口失焦时若剪贴板有分享链接，触发右下角弹窗。

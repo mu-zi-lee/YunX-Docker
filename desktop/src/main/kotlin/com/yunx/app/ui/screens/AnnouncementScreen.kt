@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
@@ -175,16 +176,17 @@ fun AnnouncementPopupDialog(
             Column {
                 val cover = announcement.coverImage
                 if (!cover.isNullOrBlank()) {
-                    // 弹窗封面走**固定高度**，不用 autoHeight：弹窗高度必须可预期 ——
-                    // 按图片原始比例的话，一张方图/长图就能把弹窗撑满、把标题和摘要挤成一团。
+                    // 封面按图片自身比例自适应（ContentScale.Fit，不裁切），高度上限 [PopupCoverMaxHeight]：
+                    // 弹窗高度必须可预期 —— 不设上限时一张长图会把弹窗撑满、把标题与摘要挤成一团。
                     RemoteImage(
                         url = cover,
                         contentDescription = null,
                         shape = MaterialTheme.shapes.medium,
-                        contentScale = ContentScale.Crop,
+                        contentScale = ContentScale.Fit,
+                        autoHeight = true,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(180.dp)
+                            .heightIn(max = PopupCoverMaxHeight)
                     )
                     Spacer(modifier = Modifier.height(12.dp))
                 }
@@ -214,3 +216,6 @@ fun AnnouncementPopupDialog(
         }
     )
 }
+
+/** 启动弹窗封面高度上限：图片按比例自适应展示，超过此高度才截断（配合 ContentScale.Fit，不裁切内容） */
+private val PopupCoverMaxHeight = 180.dp

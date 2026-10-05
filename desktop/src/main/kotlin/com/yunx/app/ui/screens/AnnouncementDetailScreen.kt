@@ -2,6 +2,7 @@ package com.yunx.app.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.m3.Markdown
 import com.yunx.app.data.announcement.AnnouncementApi
@@ -83,13 +86,23 @@ fun AnnouncementDetailPage(
             )
         }
     ) { innerPadding ->
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+            // 图片最大高度：按可用高度取比例（自适应窗口），再夹到 [160dp, 360dp] —— 下限保证
+            // 小窗口下图不至于太小，上限保证大窗口下一张长图不会把正文挤到需要滑很久才看到。
+            val maxImageHeight = if (maxHeight == Dp.Infinity) {
+                320.dp
+            } else {
+                (maxHeight * 0.4f).coerceIn(160.dp, 360.dp)
+            }
             when (state) {
-                is AnnouncementViewModel.DetailUiState.Loaded -> AnnouncementDetailContent(item = state.item)
+                is AnnouncementViewModel.DetailUiState.Loaded -> AnnouncementDetailContent(
+                    item = state.item,
+                    maxImageHeight = maxImageHeight
+                )
                 is AnnouncementViewModel.DetailUiState.Failed -> AnnouncementErrorState(
                     message = state.message,
                     onRetry = onRetry,
@@ -105,6 +118,7 @@ fun AnnouncementDetailPage(
 @Composable
 private fun AnnouncementDetailContent(
     item: AnnouncementApi.Announcement,
+    maxImageHeight: Dp,
     modifier: Modifier = Modifier
 ) {
     // 正文排版与 README 预览共用同一份紧凑字号（见 ui/theme/Type.kt）
@@ -186,14 +200,17 @@ private fun AnnouncementDetailContent(
                 val cover = item.coverImage
                 if (!cover.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(16.dp))
-                    // 封面按图片自身比例铺满宽度，不做裁切（公告封面常常是长图或截图）
+                    // 封面按图片自身比例铺满宽度、不做裁切（公告封面常常是长图或截图），
+                    // 但高度上限为可用高度的 maxImageHeight，避免长图把正文挤出屏幕
                     RemoteImage(
                         url = cover,
                         contentDescription = null,
                         shape = MaterialTheme.shapes.large,
                         contentScale = ContentScale.Fit,
                         autoHeight = true,
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = maxImageHeight)
                     )
                 }
                 Spacer(modifier = Modifier.height(16.dp))
@@ -229,6 +246,7 @@ private fun AnnouncementDetailContent(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 12.dp)
+                        .heightIn(max = maxImageHeight)
                 )
             }
         }

@@ -2,6 +2,7 @@ package com.yunx.app.ui.components
 
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +23,8 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 
@@ -59,9 +62,16 @@ fun RemoteImage(
     fallback: ImageVector? = null,
     fallbackTint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     autoHeight: Boolean = false,
-    placeholderRatio: Float = 16f / 9f
+    placeholderRatio: Float = 16f / 9f,
+    /** 非空时图片可点击（如单击放大查看）：点击区 = 图片本身大小，桌面显示手型光标 */
+    onClick: (() -> Unit)? = null
 ) {
     val link = url?.trim().orEmpty()
+    val clickModifier = if (onClick != null) {
+        Modifier.clickable(onClick = onClick).pointerHoverIcon(PointerIcon.Hand)
+    } else {
+        Modifier
+    }
     var failed by remember(link) { mutableStateOf(false) }
     // 已缓存过的图直接当初始值：重组 / 回退到本页时不会先闪一下占位色
     val bitmap by produceState<ImageBitmap?>(
@@ -83,7 +93,7 @@ fun RemoteImage(
     if (autoHeight) {
         // 容器包裹图片本身（不强制撑满可用宽度）：底框宽度 == 实际绘制宽度，
         // 不会在窄图两侧留下比图片更宽的底色；父级按起始端对齐，缩小后的图自然靠左。
-        BoxWithConstraints(modifier = modifier, contentAlignment = Alignment.Center) {
+        BoxWithConstraints(modifier = modifier.then(clickModifier), contentAlignment = Alignment.Center) {
             val ratio = if (image != null && image.height > 0) {
                 image.width.toFloat() / image.height.toFloat()
             } else {
@@ -121,7 +131,7 @@ fun RemoteImage(
         contentScale = contentScale,
         fallback = fallback,
         fallbackTint = fallbackTint,
-        modifier = modifier
+        modifier = modifier.then(clickModifier)
     )
 }
 

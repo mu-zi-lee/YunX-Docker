@@ -31,7 +31,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.layout.ContentScale
@@ -44,6 +47,7 @@ import com.yunx.app.data.announcement.formatLocalDateTime
 import com.yunx.app.data.announcement.parseIsoMillis
 import com.yunx.app.data.announcement.relativeTime
 import com.yunx.app.ui.components.GitHubMarkdownImageTransformer
+import com.yunx.app.ui.components.ImageViewerOverlay
 import com.yunx.app.ui.components.RemoteImage
 import com.yunx.app.ui.rememberGlobalSnackbarHostState
 import com.yunx.app.ui.theme.compactMarkdownTypography
@@ -69,50 +73,59 @@ fun AnnouncementDetailPage(
 ) {
     // 独立全屏覆盖页：自带 Snackbar 宿主（覆盖层会遮挡主页 Scaffold 的 SnackbarHost）
     val snackbarHostState = rememberGlobalSnackbarHostState()
+    // 单击图片放大查看的当前图片 URL（null = 查看器未打开）
+    var viewingImage by remember { mutableStateOf<String?>(null) }
 
-    Scaffold(
-        modifier = modifier.fillMaxSize(),
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                title = { Text("公告详情", style = MaterialTheme.typography.titleLarge) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+    // 外层 Box：图片查看器覆盖整窗（含顶栏），关闭后回到详情页
+    Box(modifier = modifier.fillMaxSize()) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            topBar = {
+                TopAppBar(
+                    title = { Text("公告详情", style = MaterialTheme.typography.titleLarge) },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface
+                    )
                 )
-            )
-        }
-    ) { innerPadding ->
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            // 图片最大高度：按可用高度取比例（自适应窗口），再夹到 [160dp, 360dp] —— 下限保证
-            // 小窗口下图不至于太小，上限保证大窗口下一张长图不会把正文挤到需要滑很久才看到。
-            val maxImageHeight = if (maxHeight == Dp.Infinity) {
-                320.dp
-            } else {
-                (maxHeight * 0.4f).coerceIn(160.dp, 360.dp)
             }
-            when (state) {
-                is AnnouncementViewModel.DetailUiState.Loaded -> AnnouncementDetailContent(
-                    item = state.item,
-                    maxImageHeight = maxImageHeight
-                )
-                is AnnouncementViewModel.DetailUiState.Failed -> AnnouncementErrorState(
-                    message = state.message,
-                    onRetry = onRetry,
-                    modifier = Modifier.align(Alignment.Center)
-                )
-                // Idle / Loading：都按加载中处理（宿主一进来就发起请求，Idle 只是一瞬间）
-                else -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+        ) { innerPadding ->
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+            ) {
+                // 图片最大高度：按可用高度取比例（自适应窗口），再夹到 [160dp, 360dp] —— 下限保证
+                // 小窗口下图不至于太小，上限保证大窗口下一张长图不会把正文挤到需要滑很久才看到。
+                val maxImageHeight = if (maxHeight == Dp.Infinity) {
+                    320.dp
+                } else {
+                    (maxHeight * 0.4f).coerceIn(160.dp, 360.dp)
+                }
+                when (state) {
+                    is AnnouncementViewModel.DetailUiState.Loaded -> AnnouncementDetailContent(
+                        item = state.item,
+                        maxImageHeight = maxImageHeight,
+                        onImageClick = { viewingImage = it }
+                    )
+                    is AnnouncementViewModel.DetailUiState.Failed -> AnnouncementErrorState(
+                        message = state.message,
+                        onRetry = onRetry,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                    // Idle / Loading：都按加载中处理（宿主一进来就发起请求，Idle 只是一瞬间）
+                    else -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                }
             }
         }
+
+        // 单击封面 / 正文图集 → 全窗口放大查看
+        ImageViewerOverlay(url = viewingImage, onDismiss = { viewingImage = null })
     }
 }
 
@@ -120,6 +133,7 @@ fun AnnouncementDetailPage(
 private fun AnnouncementDetailContent(
     item: AnnouncementApi.Announcement,
     maxImageHeight: Dp,
+    onImageClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     // 正文排版与 README 预览共用同一份紧凑字号（见 ui/theme/Type.kt）
@@ -209,6 +223,7 @@ private fun AnnouncementDetailContent(
                         shape = MaterialTheme.shapes.large,
                         contentScale = ContentScale.Fit,
                         autoHeight = true,
+                        onClick = { onImageClick(cover) },
                         modifier = Modifier
                             .widthIn(max = DetailImageMaxWidth)
                             .heightIn(max = maxImageHeight)
@@ -244,6 +259,7 @@ private fun AnnouncementDetailContent(
                     shape = MaterialTheme.shapes.large,
                     contentScale = ContentScale.Fit,
                     autoHeight = true,
+                    onClick = { onImageClick(imageUrl) },
                     modifier = Modifier
                         .widthIn(max = DetailImageMaxWidth)
                         .padding(top = 12.dp)

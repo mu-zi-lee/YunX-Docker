@@ -27,7 +27,9 @@ import java.util.zip.ZipInputStream
  *
  * 进程约定：
  * - 只监听 `127.0.0.1`（随机空闲端口），**不设 `-p` 密码** ⇒ 服务端不启用 Web 鉴权、也无需 apiToken；
- * - 内核、存储（bolt）、临时目录全部落在应用数据目录 `<dataDir>/gopeed/` 下，不污染安装目录；
+ * - 内核与存储（bolt）落在应用数据目录 `<dataDir>/gopeed/` 下，不污染安装目录；
+ *   ★ 启动参数只认 gopeed 服务端真实存在的开关（`-A/-P/-u/-p/-T/-d/-w/-c`，见上游 `cmd/web/flags.go`）——
+ *   传不存在的参数会让 gopeed 打印 usage 后立刻退出（引擎永远起不来），所以这里只传 `-A/-P/-d`；
  * - JDK 17 在 Windows 上默认以 `CREATE_NO_WINDOW` 创建子进程（仅显式继承 stdio 时才清除），
  *   所以不会冒出控制台黑窗；stdout/stderr 重定向到日志文件，避免管道写满卡死子进程。
  *
@@ -110,9 +112,6 @@ object GopeedEngine {
 
     /** 引擎存储目录（bolt 数据库） */
     private fun storageDir(): File = File(engineDir(), "storage")
-
-    /** 引擎临时目录（分片临时文件） */
-    private fun tempDir(): File = File(engineDir(), "tmp")
 
     /** 引擎日志文件（子进程 stdout/stderr 重定向到这里） */
     private fun logFile(): File = File(engineDir(), "gopeed.log")
@@ -205,8 +204,7 @@ object GopeedEngine {
             exe.absolutePath,
             "-A", "127.0.0.1",
             "-P", localPort.toString(),
-            "-d", storageDir().absolutePath,
-            "--temp-dir", tempDir().absolutePath
+            "-d", storageDir().absolutePath
         )
         return try {
             val log = logFile().also { it.parentFile?.mkdirs() }
@@ -220,10 +218,18 @@ object GopeedEngine {
             port = localPort
             registerShutdownHook()
             if (!awaitReady()) {
+                // 进程还活着 ⇒ 真的没在限时内响应；已经退出 ⇒ 多半是启动参数/内核不匹配，
+                // 此时把日志路径一并给出，避免统一报成「启动超时」误导排查方向。
+                val exitCode = runCatching { p.exitValue() }.getOrNull()
                 runCatching { p.destroyForcibly() }
                 process = null
                 port = 0
-                val detail = "启动超时（${READY_TIMEOUT_MS / 1000}s 内未响应 /api/v1/info），详见 ${log.absolutePath}"
+                val detail = if (exitCode != null) {
+                    "引擎进程已退出（退出码 $exitCode），未能提供 HTTP 服务；" +
+                        "详见子进程日志 ${log.absolutePath}"
+                } else {
+                    "启动超时（${READY_TIMEOUT_MS / 1000}s 内未响应 /api/v1/info），详见 ${log.absolutePath}"
+                }
                 lastError = detail
                 throw IllegalStateException(detail)
             }

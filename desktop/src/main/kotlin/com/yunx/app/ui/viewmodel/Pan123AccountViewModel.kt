@@ -10,6 +10,7 @@ import androidx.lifecycle.viewmodel.CreationExtras
 import kotlin.reflect.KClass
 import com.yunx.app.data.db.Pan123AccountEntity
 import com.yunx.app.data.repository.Pan123AccountRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -41,16 +42,19 @@ class Pan123AccountViewModel(
         loginError = null
     }
 
-    /** 账号密码登录；成功返回 true */
+    /** 账号密码登录；成功返回 true（错误文案由仓库映射，绝不复述服务端原文） */
     fun login(account: String, password: String) {
         viewModelScope.launch {
             loginError = null
             isLoggingIn = true
             try {
-                val ok = repository.login(account, password)
-                if (!ok) loginError = "登录失败，请检查账号密码"
+                val message = repository.loginWithPassword(account, password)
+                if (message != null) loginError = message
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                loginError = e.message ?: "登录失败，请检查账号密码"
+                // 登录接口自身已把网络错误映射成文案，这里是最后一道兜底（写库等非网络异常）
+                loginError = "登录失败，请稍后重试"
             } finally {
                 isLoggingIn = false
             }

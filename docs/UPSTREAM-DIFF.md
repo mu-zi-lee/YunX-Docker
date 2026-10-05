@@ -217,4 +217,22 @@
 - **未做端到端真机验证**：内核下载与引擎进程运行需联网拉取 ~40MB 官方包，尚未实跑；
   首次使用建议按「从官方下载内核」→ 切换引擎 → 下载一个小文件 → 暂停/继续/删除 全流程自测。
 
+### 9.7 本次对齐（上游 `4cfb850`/`8dd441e`/`a4d5a7e`/`040584a`）
+
+#### 已移植
+
+| 上游提交 | 内容 | 桌面实现与取舍 |
+| --- | --- | --- |
+| `a4d5a7e`(#145) | 新增三个网盘（光鸭云盘 / 蓝奏云优享版 / 蓝奏云） | **网络层**：`GuangYaApi`/`ILanzouApi`/`LanzouApi` + 各自 Constants；蓝奏的 `acw_sc__v2` 人机校验上游本就是纯 Kotlin，桌面逐字节移植到 `LanzouCrypto`（未引入 JS 引擎等新依赖）。**数据层**：三张账号表 + 实体 + DAO + `SecureAccountDaos` AES-GCM 包装（光鸭 4 个凭证字段、优享 appToken/password、蓝奏 cookie）。**认证备份**：三平台纳入导出/导入（**桌面补上游遗漏** —— 上游 #145 未改 `AuthBackupManager`，不补会让「备份→恢复」丢这三个账号）。**解析识别**：`SharePlatform` 增 3 个平台；光鸭 `guangyapan.com/s/{id}`；蓝奏云优享版 `ilanzou.*`；蓝奏云域名族 `lanzou*`/`lan[zs]o[ux]`，**前置边界 `(?:^|[/.])` 不可省**，否则 `www.ilanzou.com` 里的 `lanzou.com` 会被误判成蓝奏云（优享版判断必须先于蓝奏云）。**接入**：`ResolveViewModel`（凭证/仓库/默认目录 `""`/平台名/游客下载/下载请求头/转存分支）、`DriveQuotaViewModel`（光鸭需 accessToken+设备标识、优享需 appToken+uuid；**蓝奏官方无配额接口**）、`DriveScreen` 卡片与路由 8/9/10、`MainScreen` 装配与登录页、关于页/收藏标签/设置页线程项/引导页。**登录**：三平台均为纯 HTTP 账号密码登录（光鸭另含短信验证码），**无需内嵌浏览器**。**UI 形态**：云盘页/账号弹窗/登录页按桌面既有 Pan115 形态重写，不照搬 Android UI。 |
+| `4cfb850`(#143) | 公告图集（封面并入图集 / 全屏看图 / 刷新同步详情缓存） | **已移植**：`refresh()` 作废 `detailCache` 并 `reloadCurrentDetail()`（保留旧内容重拉、失败只弹 Snackbar 不闪加载态）、详情页右上角刷新按钮、封面与 `images` 去重（同一张图不再渲染两次）。**未移植**：把封面挪到正文下方组成横向缩略图条 —— 桌面此前已按用户要求实现「正文图集等高横向排布、放不下换行」+ 全窗口看图组件（`ImageViewerOverlay`，滚轮以鼠标为锚点缩放/拖拽/双击复位），上游方案依赖 `SharedTransitionLayout` 共享元素（桌面无此基础设施），改动会退回用户已确认的交互，故保持现状。 |
+| `8dd441e`(#144) | 凭证失钥自愈（Android Keystore keyblob 作废） | **已移植**：`GitHubTokenStore.getToken()` 解密失败时清掉解不开的密文（否则每次读取都失败、UI 无法如实显示「未配置」）。**桌面已有**：下载请求头 `loadPersistedHeaders` 失败即清空该条并自愈；各账号 DAO 走 `SecureAccountDaos.decryptOrClear`（失败清该条 + 退回未登录）。**未移植**：Keystore 专项逻辑（`CredentialKeyException{PermanentlyInvalid,Unavailable}`、删坏条目重建密钥、失钥标记弹窗、`shared` 单例）——桌面用本地密钥文件 `FileCredentialCipher`，不存在「设备凭证变更导致 keyblob 永久失效」这一失效形态，失配时退回重登已足够。 |
+| `040584a`(#146) | 迅雷/123 登录方式重构（三入口 / 两通道） | **已移植**：① 123 新增 `Pan123DeviceId`（桌面用 `AppContext.miscPrefs` 持久化稳定 UUID，**跨启动不变**，否则被服务端当新设备）与 `passwordLogin`（`user.123pan.cn/api/user/sign_in`，**成功判定 `code==200`**，账号 trim / **密码不 trim**，带 `platform: web`/`app-version: 132`/`loginuuid`/`Origin`/`Referer`）+ `Pan123LoginSupport`（频率/风控/冻结三类文案，**绝不复述服务端原文** —— 响应可能回显账号密码）。② 迅雷短信提为**一等入口**（不再只在密码登录触发风控后出现），两条流程共用 `sendSms`/`loginWithSms`，重发冷却 60s 记在 ViewModel 墙上时钟；进登录页 `resetLoginStep()`。③ 迅雷**网页登录**（`XunleiWebLoginScreen`，内嵌 JCEF 打开 `pan.xunlei.com` + 手动粘贴兜底）：新增 `XunleiWebCredential`（`parse`/`parseRawToken`/`fieldsFrom`/`isValidToken`/`isTrustedUrl` 纯函数 + Cookie 桥脚本）。**桌面关键差异**：上游从 WebView 读 localStorage，而桌面 JCEF 无 `executeJavaScript` 返回值 —— 改为**定期注入 JS 把 localStorage 凭据分片写进 Cookie**（`yunx_xl_cred_*`，规避 4KB 上限），再从 `CefCookieManager` 读回解析；读到的文本必须再过 `GET /drive/v1/about`（`verifyAccessToken`）确认可用才落库。④ **网页 token 与 App token 是两套 OAuth 客户端**（App `Xp6vsxz_7IYVw2BB` + secret + 表单刷新；网页 `Xqp0kJBXWhwaTpB6` 无 secret + JSON 刷新 + `X-Client-Id`），落库记 `authType='webToken'`，`XunleiApi.refreshToken(authType)` 分支，认证备份带上该字段（旧备份缺省=App 通道）。⑤ 上游两个 bug：端口白名单（`Uri.getPort()` 未写端口时返回 -1，`!= 443` 的写法会拦掉所有跳转）桌面无同类代码；剥 `Bearer ` 前缀「先 trim 再匹配」已按正确写法实现。**DB**：`xunlei_account` 增 `authType`（DDL + `ALTER TABLE` 迁移 + 单行表 columns/read/bind 三处同步；**该字段不加密**，它只是判别标记）。**未移植**：123 的网页登录（桌面原本只有账号密码表单；123 的 authorToken 只在 localStorage、不在 Cookie，JCEF 无法低成本读取）。 |
+| `4cfb850`(#143) 桌面差异 | 图集交互 | 见上：桌面保留自己的图集与看图方案（用户已确认）。 |
+| `040584a`(#146) 桌面差异 | 登录页弹窗 | 登录页是 MainScreen 的**早返回全屏覆盖层**，此时根部 `OverlayDialogHost()` 不参与组合，注册式 `FadeAlertDialog` 不会渲染；网页登录页的「手动粘贴」弹窗因此就地用「零原生窗口」画法（遮罩 + Surface 卡片 + 淡入淡出），仍然不用 material3 `AlertDialog`/`Popup`。 |
+
+#### 验证
+
+- `gradle :desktop:compileKotlin` 通过。
+- **未做端到端真机验证**：三个新网盘需真实账号；迅雷网页登录的 JCEF 注入时序、`authType=webToken` 刷新分支、凭据 Cookie 分片拼回均需真机自测。
+
 

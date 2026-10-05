@@ -21,6 +21,16 @@ import java.util.concurrent.ThreadLocalRandom
 import java.util.zip.CRC32
 
 /**
+ * 123 账号密码登录结果。
+ * 成功时拿到的是 authorToken（与网页登录从 localStorage 读到的同源同形，可直接替换使用）；
+ * 失败时带上可以直接展示给用户的文案（不包含服务端原文）。
+ */
+sealed interface Pan123LoginResult {
+    data class Success(val token: String) : Pan123LoginResult
+    data class Failure(val message: String) : Pan123LoginResult
+}
+
+/**
  * 123 云盘 API 封装（OkHttp，依据《123网盘API文档_面向Agent.md》）。
  *
  * 鉴权体系（文档 §3.2 / §6）：
@@ -40,8 +50,8 @@ class Pan123Api(
 
     private val jsonMediaType = "application/json;charset=UTF-8".toMediaType()
 
-    /** 设备标识（文档 §3.2：同一会话内不变、不参与签名；进程级固定即可） */
-    private val loginuuid: String = Pan123Constants.newLoginUuid()
+    /** 设备标识（文档 §3.2：同一设备长期不变、不参与签名；由 [Pan123DeviceId] 持久化，跨启动稳定） */
+    private val loginuuid: String = Pan123DeviceId.value()
 
     // ---------- 签名算法（文档 §6，已抓包逐字还原 + 实时验证） ----------
 
@@ -85,34 +95,63 @@ class Pan123Api(
     // ---------- 登录（文档 §5.1，无签名） ----------
 
     /**
-     * 账号密码登录 → data.token（JWT，Bearer）。
-     * 成功判定：`code == 200`（注意不是 0）。
+     * 账号密码登录 → data.token（authorToken）。
+     *
+     * 三点容易踩：
+     * 1. 这是**另一个站**（user.123pan.cn），个人盘 API 在 yun.123pan.cn，不能混用 host；
+     * 2. 成功判定是 `code == 200`，**不是**其它接口的 `code == 0`；
+     * 3. 密码按原值提交（不 trim——trim 会把「密码里有空格」的用户直接挡在门外），账号才 trim。
+     *
+     * 失败一律返回 [Pan123LoginResult.Failure]，文案由 [Pan123LoginSupport] 生成、绝不复述服务端原文。
      */
-    suspend fun login(passport: String, password: String): String = withContext(Dispatchers.IO) {
-        val body = JSONObject()
-            .put("passport", passport)
-            .put("password", password)
-            .put("remember", false)
-        val request = Request.Builder()
-            .url(Pan123Constants.LOGIN_URL)
-            .header("Content-Type", "application/json;charset=UTF-8")
-            .header("platform", Pan123Constants.PLATFORM_WEB)
-            .header("app-version", Pan123Constants.APP_VERSION_LOGIN)
-            .header("loginuuid", loginuuid)
-            .header("Origin", Pan123Constants.LOGIN_BASE)
-            .header("Referer", "${Pan123Constants.LOGIN_BASE}/centerlogin?redirect_url=&source_page=website")
-            .header("User-Agent", Pan123Constants.WEB_UA)
-            .post(body.toString().toRequestBody(jsonMediaType))
-            .build()
-        val json = executeJson(request)
-        val code = json.optInt("code", -1)
-        if (code != 200) {
-            throw IllegalStateException(json.optString("message").ifBlank { "登录失败（code=$code）" })
+    suspend fun passwordLogin(account: String, password: String): Pan123LoginResult =
+        withContext(Dispatchers.IO) {
+            val passport = account.trim()
+            if (passport.isEmpty() || password.isEmpty()) {
+                return@withContext Pan123LoginResult.Failure("请输入账号和密码")
+            }
+            if (passport.length > 254 || password.length > 256) {
+                return@withContext Pan123LoginResult.Failure("账号或密码过长")
+            }
+            val body = JSONObject()
+                .put("passport", passport)
+                .put("password", password)
+                .put("remember", false)
+                .toString()
+            val request = Request.Builder()
+                .url(Pan123Constants.LOGIN_URL)
+                .header("platform", Pan123Constants.PLATFORM_WEB)
+                .header("app-version", Pan123Constants.APP_VERSION_SIGN_IN)
+                .header("loginuuid", loginuuid)
+                .header("Origin", Pan123Constants.SIGN_IN_ORIGIN)
+                .header("Referer", Pan123Constants.SIGN_IN_REFERER)
+                .header("User-Agent", Pan123Constants.WEB_UA)
+                .header("Content-Type", "application/json;charset=UTF-8")
+                .post(body.toRequestBody(jsonMediaType))
+                .build()
+            runCatching {
+                client.newCall(request).execute().use { resp ->
+                    val text = resp.body?.string().orEmpty()
+                    val json = runCatching { JSONObject(text) }.getOrNull()
+                    val code = json?.optInt("code", -1) ?: -1
+                    val token = json?.optJSONObject("data")?.optString("token").orEmpty()
+                    when {
+                        resp.isSuccessful && code == 200 && Pan123LoginSupport.isValidToken(token) ->
+                            Pan123LoginResult.Success(token)
+                        // 响应不是 JSON（比如被重定向到 HTML 页）时 message 为空，走兜底文案
+                        else -> Pan123LoginResult.Failure(
+                            Pan123LoginSupport.describeFailure(
+                                httpStatus = resp.code,
+                                code = code,
+                                serverMessage = json?.optString("message").orEmpty()
+                            )
+                        )
+                    }
+                }
+            }.getOrElse {
+                Pan123LoginResult.Failure("网络异常，无法连接 123 登录服务，请稍后重试")
+            }
         }
-        val token = json.optJSONObject("data")?.optString("token").orEmpty()
-        if (token.isBlank()) throw IllegalStateException("登录失败：未返回 token")
-        token
-    }
 
     // ---------- 用户信息（文档 §5.11） ----------
 

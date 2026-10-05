@@ -27,6 +27,13 @@ object Pan123Constants {
     /** 登录（POST /api/user/sign_in，无签名） */
     const val LOGIN_URL = "$LOGIN_BASE/api/user/sign_in"
 
+    /** 账号密码登录的 Origin / Referer（缺了会被风控拒绝）；注意域名是 user.123pan.cn，不是个人盘的 yun.123pan.cn */
+    const val SIGN_IN_ORIGIN = LOGIN_BASE
+    const val SIGN_IN_REFERER = "$LOGIN_BASE/"
+
+    /** 账号密码登录专用 app-version（网页端是 3，登录接口要 132，两者不能混用） */
+    const val APP_VERSION_SIGN_IN = "132"
+
     /** 分享文件列表（GET /b/api/share/get，匿名、无签名） */
     const val SHARE_GET_URL = "$API_BASE/b/api/share/get"
 

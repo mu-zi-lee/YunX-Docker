@@ -4,6 +4,7 @@ import com.yunx.app.data.db.XunleiAccountDao
 import com.yunx.app.data.db.XunleiAccountEntity
 import com.yunx.app.data.network.XunleiApi
 import com.yunx.app.data.network.XunleiLoginStep
+import com.yunx.app.data.network.XunleiWebCredential
 import com.yunx.app.util.CookieCleaner
 import kotlinx.coroutines.flow.Flow
 
@@ -88,6 +89,33 @@ class XunleiAccountRepository(
     suspend fun updateTokens(accessToken: String, refreshToken: String) {
         val acc = dao.getAccount() ?: return
         dao.upsert(acc.copy(accessToken = accessToken, refreshToken = refreshToken))
+    }
+
+    /**
+     * 网页登录：解析 pan.xunlei.com 的网页凭据（localStorage 原文 / 手动粘贴的 JSON 或裸 token），
+     * 打一次真实云盘接口校验可用后落库。
+     *
+     * 与密码/短信登录的区别只有两点：token 由网页签发，以及刷新时必须换用网页 OAuth 客户端
+     * （因此记下 [XunleiWebCredential.AUTH_TYPE]）。返回值直接决定登录页的自动检测是「登录成功」
+     * 还是「继续等」——校验不通过（含网络异常）一律 false，绝不把中间态当登录成功。
+     */
+    suspend fun saveWebCredential(raw: String): Boolean {
+        val tokens = XunleiWebCredential.parse(raw) ?: return false
+        // 网页凭据不带设备指纹，取不到时用本机指纹兜底（云盘接口需要一个 X-Device-Id）
+        val deviceId = tokens.deviceId.ifBlank { XunleiApi.newDeviceId() }
+        if (!api.verifyAccessToken(tokens.accessToken, deviceId, tokens.captchaToken)) return false
+        dao.upsert(
+            XunleiAccountEntity(
+                id = "xunlei",
+                accessToken = tokens.accessToken,
+                refreshToken = tokens.refreshToken,
+                deviceId = deviceId,
+                captchaToken = tokens.captchaToken,
+                nickname = tokens.nickname.ifBlank { "迅雷用户" },
+                authType = XunleiWebCredential.AUTH_TYPE
+            )
+        )
+        return true
     }
 
     suspend fun logout() {

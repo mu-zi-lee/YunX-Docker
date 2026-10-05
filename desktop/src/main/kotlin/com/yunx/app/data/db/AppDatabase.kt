@@ -98,6 +98,12 @@ class AppDatabase private constructor(private val conn: Connection) {
                             it.execute("ALTER TABLE download_task ADD COLUMN engineTaskId TEXT NOT NULL DEFAULT ''")
                         }
                     }
+                    // 迁移：旧库缺少 authType 列时补上（迅雷登录方式；空串=App 通道，webToken=网页登录）
+                    runCatching {
+                        conn.createStatement().use {
+                            it.execute("ALTER TABLE xunlei_account ADD COLUMN authType TEXT NOT NULL DEFAULT ''")
+                        }
+                    }
                     Log.i(TAG, "database opened: ${dbFile.absolutePath}")
                     return AppDatabase(conn)
                 } catch (e: Exception) {
@@ -129,7 +135,7 @@ class AppDatabase private constructor(private val conn: Connection) {
         private val DDL = listOf(
             "CREATE TABLE IF NOT EXISTS quark_account (id TEXT PRIMARY KEY NOT NULL, cookie TEXT NOT NULL, nickname TEXT NOT NULL, updatedAt INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS uc_account (id TEXT PRIMARY KEY NOT NULL, cookie TEXT NOT NULL, nickname TEXT NOT NULL, updatedAt INTEGER NOT NULL)",
-            "CREATE TABLE IF NOT EXISTS xunlei_account (id TEXT PRIMARY KEY NOT NULL, accessToken TEXT NOT NULL, refreshToken TEXT NOT NULL, deviceId TEXT NOT NULL, captchaToken TEXT NOT NULL, nickname TEXT NOT NULL, updatedAt INTEGER NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS xunlei_account (id TEXT PRIMARY KEY NOT NULL, accessToken TEXT NOT NULL, refreshToken TEXT NOT NULL, deviceId TEXT NOT NULL, captchaToken TEXT NOT NULL, nickname TEXT NOT NULL, authType TEXT NOT NULL DEFAULT '', updatedAt INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS baidu_account (id TEXT PRIMARY KEY NOT NULL, cookie TEXT NOT NULL, nickname TEXT NOT NULL, updatedAt INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS c139_account (id TEXT PRIMARY KEY NOT NULL, cookie TEXT NOT NULL, nickname TEXT NOT NULL, authorization TEXT NOT NULL, updatedAt INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS pan123_account (id TEXT PRIMARY KEY NOT NULL, accessToken TEXT NOT NULL, account TEXT NOT NULL, nickname TEXT NOT NULL, updatedAt INTEGER NOT NULL)",
@@ -230,18 +236,20 @@ private class JdbcUcAccountDao(conn: Connection) : UCAccountDao {
 private class JdbcXunleiAccountDao(conn: Connection) : XunleiAccountDao {
     private val d = JdbcSingleRowDao(
         conn, "xunlei_account",
-        listOf("id", "accessToken", "refreshToken", "deviceId", "captchaToken", "nickname", "updatedAt"), "xunlei",
+        listOf("id", "accessToken", "refreshToken", "deviceId", "captchaToken", "nickname", "authType", "updatedAt"), "xunlei",
         read = { rs ->
             XunleiAccountEntity(
                 "xunlei",
                 rs.getString("accessToken"), rs.getString("refreshToken"), rs.getString("deviceId"),
-                rs.getString("captchaToken"), rs.getString("nickname"), rs.getLong("updatedAt")
+                rs.getString("captchaToken"), rs.getString("nickname"),
+                runCatching { rs.getString("authType") }.getOrDefault(""),
+                rs.getLong("updatedAt")
             )
         },
         bind = { ps, a ->
             ps.setString(1, a.id); ps.setString(2, a.accessToken); ps.setString(3, a.refreshToken)
             ps.setString(4, a.deviceId); ps.setString(5, a.captchaToken); ps.setString(6, a.nickname)
-            ps.setLong(7, a.updatedAt)
+            ps.setString(7, a.authType); ps.setLong(8, a.updatedAt)
         }
     )
 

@@ -25,10 +25,16 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.yunx.app.ui.viewmodel.XunleiAccountViewModel
+import kotlinx.coroutines.delay
 
 /**
- * 迅雷网盘登录页：账号+密码登录，触发风控时切换短信验证码流程。
- * 步骤：账号密码 →（需要时）发送短信 → 输入验证码 → 完成。
+ * 迅雷网盘登录页，三个入口：
+ * - **账号密码**：App 通道 `v3/login`，新设备/异地必然触发 `review_panel`，要再补一次短信验证码；
+ * - **短信登录**（一等入口）：走同一套 sendsms / smslogin（不经过密码），没设过密码 / 忘记密码 /
+ *   被风控挡住都能直接用；
+ * - **网页登录**：`pan.xunlei.com` 的另一套接口，不受 App 通道风控影响（回调 [onWebLogin]）。
+ *
+ * 验证码重发冷却 60 秒，记在 ViewModel 的墙上时钟里：只有服务端确认发出才开始计时，切页/重进不丢。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -36,7 +42,8 @@ fun XunleiLoginScreen(
     viewModel: XunleiAccountViewModel,
     onBack: () -> Unit,
     onSaved: () -> Unit,
-    onVerify: (url: String, deviceId: String) -> Unit = { _, _ -> }
+    onVerify: (url: String, deviceId: String) -> Unit = { _, _ -> },
+    onWebLogin: () -> Unit = {}
 ) {
     val step = viewModel.loginStep
     val error = viewModel.loginError
@@ -48,7 +55,26 @@ fun XunleiLoginScreen(
     var password by rememberSaveable { mutableStateOf("") }
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
     var smsCode by rememberSaveable { mutableStateOf("") }
-    var isSending by remember { mutableStateOf(false) }
+    // 是否主动选择「短信登录」：短信是一等入口，不再只能靠密码登录触发风控才走到
+    var useSmsLogin by rememberSaveable { mutableStateOf(false) }
+
+    // 进入登录页先重置登录步骤：上次可能在「安全验证」那一步被关掉，creditkey 早已失效，
+    // 直接渲染成验证步骤只会让用户提交必然失败的验证码
+    LaunchedEffect(Unit) { viewModel.resetLoginStep() }
+
+    // 密码登录触发风控（needSms）或用户主动选择短信，都进入短信步骤
+    val smsMode = useSmsLogin || step?.needSms == true
+
+    // 重发冷却倒计时：读 ViewModel 的墙上时钟，切页/重进不会把倒计时弄丢
+    var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(viewModel.smsCooldownUntil) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            if (nowMs >= viewModel.smsCooldownUntil) break
+            delay(500)
+        }
+    }
+    val cooldownSeconds = ((viewModel.smsCooldownUntil - nowMs + 999) / 1000).coerceAtLeast(0L)
 
     // 登录错误提示
     LaunchedEffect(error) {
@@ -90,22 +116,49 @@ fun XunleiLoginScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Text(
-                text = if (step?.needSms == true) "短信验证" else "登录迅雷网盘",
+                text = if (smsMode) "短信验证" else "登录迅雷网盘",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
             )
             Text(
-                text = if (step?.needSms == true) {
-                    if (smsSent) "账号密码登录触发安全验证，验证码已发送至 ${username}"
-                    else "账号密码登录触发安全验证，请点击下方「发送验证码」"
-                } else {
-                    "使用迅雷账号登录，支持解析与下载分享文件"
+                text = when {
+                    step?.needSms == true && smsSent -> "账号密码登录触发安全验证，验证码已发送至 $username"
+                    step?.needSms == true -> "账号密码登录触发安全验证，请点击下方「发送验证码」"
+                    useSmsLogin && smsSent -> "验证码已发送至 $username，请输入后登录"
+                    useSmsLogin -> "使用手机号 + 短信验证码登录，无需密码"
+                    else -> "使用迅雷账号登录，支持解析与下载分享文件"
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            if (step == null || !step.needSms) {
+            // 登录方式分段：短信步骤中不显示，避免中途切换丢掉当前 creditkey
+            if (step?.needSms != true) {
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    SegmentedButton(
+                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                        selected = !useSmsLogin,
+                        onClick = {
+                            if (useSmsLogin) {
+                                useSmsLogin = false
+                                viewModel.resetLoginStep()
+                            }
+                        }
+                    ) { Text("账号密码") }
+                    SegmentedButton(
+                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                        selected = useSmsLogin,
+                        onClick = {
+                            if (!useSmsLogin) {
+                                useSmsLogin = true
+                                viewModel.resetLoginStep()
+                            }
+                        }
+                    ) { Text("短信登录") }
+                }
+            }
+
+            if (!smsMode) {
                 OutlinedTextField(
                     value = username,
                     onValueChange = { username = it },
@@ -137,9 +190,22 @@ fun XunleiLoginScreen(
                 Button(
                     onClick = { viewModel.login(username, password) },
                     modifier = Modifier.fillMaxWidth().height(48.dp),
-                    enabled = username.isNotBlank() && password.isNotBlank() && !isSending
+                    enabled = username.isNotBlank() && password.isNotBlank()
                 ) { Text("登录") }
             } else {
+                // 短信登录第一步要手机号；密码触发的验证步骤里手机号已在上一页填过
+                if (useSmsLogin) {
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = { username = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("手机号") },
+                        leadingIcon = { Icon(Icons.Outlined.Phone, contentDescription = null) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                        singleLine = true,
+                        shape = MaterialTheme.shapes.large
+                    )
+                }
                 OutlinedTextField(
                     value = smsCode,
                     onValueChange = { smsCode = it },
@@ -152,43 +218,36 @@ fun XunleiLoginScreen(
                 )
                 Button(
                     onClick = {
-                        isSending = true
                         viewModel.loginWithSms(
                             username, smsCode,
-                            step.smsCreditKey, step.smsToken
+                            step?.smsCreditKey.orEmpty(), step?.smsToken.orEmpty()
                         )
-                        isSending = false
                     },
                     modifier = Modifier.fillMaxWidth().height(48.dp),
-                    enabled = smsCode.isNotBlank()
+                    enabled = smsCode.isNotBlank() && !step?.smsCreditKey.isNullOrBlank()
                 ) { Text("验证并登录") }
-                if (!smsSent) {
-                    // 进入界面不会自动发送验证码：主按钮「发送验证码」提示用户主动获取
-                    FilledTonalButton(
-                        onClick = {
-                            viewModel.sendSms(username)
-                            SnackbarController.show("验证码已发送")
-                        },
-                        modifier = Modifier.fillMaxWidth().height(48.dp)
-                    ) { Text("发送验证码") }
-                } else {
-                    TextButton(
-                        onClick = {
-                            viewModel.sendSms(username)
-                            SnackbarController.show("验证码已发送")
-                        },
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
-                    ) { Text("重新发送验证码") }
+                // 发送验证码：冷却期内禁用并显示剩余秒数；只在服务端确认发出后开始计时
+                FilledTonalButton(
+                    onClick = { viewModel.sendSms(username) },
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    enabled = username.isNotBlank() && !viewModel.sendingSms && cooldownSeconds == 0L
+                ) {
+                    when {
+                        viewModel.sendingSms -> Text("发送中…")
+                        cooldownSeconds > 0L -> Text("重新发送（${cooldownSeconds}s）")
+                        smsSent -> Text("重新发送验证码")
+                        else -> Text("发送验证码")
+                    }
                 }
                 Text(
-                    text = "若始终收不到短信，请确认手机号正确，或稍后重试 / 切换网络",
+                    text = "若始终收不到短信，请确认手机号正确，或改用下方「网页登录」",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.align(Alignment.CenterHorizontally)
                 )
 
-                // 短信发不出时的应用内验证兜底（应用内 WebView 承载验证页；核心验证仍走自有短信流）
-                if (step.reviewUrl.isNotBlank()) {
+                // 短信发不出时的应用内验证兜底（系统浏览器承载验证页；核心验证仍走自有短信流）
+                if (step?.reviewUrl?.isNotBlank() == true) {
                     TextButton(
                         onClick = {
                             // 用与登录请求一致的设备签名（deviceSign = div101.xxx）：
@@ -204,17 +263,18 @@ fun XunleiLoginScreen(
                             color = MaterialTheme.colorScheme.primary
                         )
                     }
-                    Text(
-                        text = "应用内完成验证后，将自动重新登录",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.align(Alignment.CenterHorizontally)
-                    )
                 }
             }
 
+            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+            // 网页登录：另一套接口，不受 App 通道风控影响，收不到短信时最稳的一条路
+            OutlinedButton(
+                onClick = onWebLogin,
+                modifier = Modifier.fillMaxWidth().height(48.dp)
+            ) { Text("网页登录（不受短信风控影响）") }
+
             // 未设置密码：跳转迅雷官网设置（浏览器打开）
-            Spacer(modifier = Modifier.height(8.dp))
             TextButton(
                 onClick = {
                     DesktopActions.openUrl("https://i.xunlei.com/xluser/validate/findpwd_acc.html")

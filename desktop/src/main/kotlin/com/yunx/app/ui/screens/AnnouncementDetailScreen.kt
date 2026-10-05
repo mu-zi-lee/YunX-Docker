@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -200,16 +201,17 @@ private fun AnnouncementDetailContent(
                 val cover = item.coverImage
                 if (!cover.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(16.dp))
-                    // 封面按图片自身比例铺满宽度、不做裁切（公告封面常常是长图或截图），
-                    // 但高度上限为可用高度的 maxImageHeight，避免长图把正文挤出屏幕
+                    // 封面按图片自身比例、以 [DetailImageMaxWidth] 为宽度上限展示（不占满整行更耐看），
+                    // 高度上限为 maxImageHeight；缩放后若比容器窄则靠左对齐（imageAlignment）
                     RemoteImage(
                         url = cover,
                         contentDescription = null,
                         shape = MaterialTheme.shapes.large,
                         contentScale = ContentScale.Fit,
                         autoHeight = true,
+                        imageAlignment = Alignment.CenterStart,
                         modifier = Modifier
-                            .fillMaxWidth()
+                            .widthIn(max = DetailImageMaxWidth)
                             .heightIn(max = maxImageHeight)
                     )
                 }
@@ -243,8 +245,9 @@ private fun AnnouncementDetailContent(
                     shape = MaterialTheme.shapes.large,
                     contentScale = ContentScale.Fit,
                     autoHeight = true,
+                    imageAlignment = Alignment.CenterStart,
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .widthIn(max = DetailImageMaxWidth)
                         .padding(top = 12.dp)
                         .heightIn(max = maxImageHeight)
                 )
@@ -280,3 +283,6 @@ private fun AnnouncementDetailContent(
         }
     }
 }
+
+/** 详情页图片宽度上限：不占满整行更耐看（窄窗口下会被可用宽度自动收窄） */
+private val DetailImageMaxWidth = 520.dp

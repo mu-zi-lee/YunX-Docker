@@ -55,7 +55,12 @@ fun RemoteImage(
     fallback: ImageVector? = null,
     fallbackTint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     autoHeight: Boolean = false,
-    placeholderRatio: Float = 16f / 9f
+    placeholderRatio: Float = 16f / 9f,
+    /**
+     * 图片在容器内的对齐方式。缩放后图比容器小（如受 `heightIn(max)` 限制的竖长图）时，
+     * 默认 [Alignment.Center] 会左右留白居中；传 [Alignment.CenterStart] 可改成靠左。
+     */
+    imageAlignment: Alignment = Alignment.Center
 ) {
     val link = url?.trim().orEmpty()
     var failed by remember(link) { mutableStateOf(false) }
@@ -98,6 +103,7 @@ fun RemoteImage(
                 contentScale = contentScale,
                 fallback = fallback,
                 fallbackTint = fallbackTint,
+                imageAlignment = imageAlignment,
                 modifier = Modifier.size(width, height)
             )
         }
@@ -112,6 +118,7 @@ fun RemoteImage(
         contentScale = contentScale,
         fallback = fallback,
         fallbackTint = fallbackTint,
+        imageAlignment = imageAlignment,
         modifier = modifier
     )
 }
@@ -126,6 +133,7 @@ private fun ImageFrame(
     contentScale: ContentScale,
     fallback: ImageVector?,
     fallbackTint: Color,
+    imageAlignment: Alignment,
     modifier: Modifier
 ) {
     Box(
@@ -139,7 +147,8 @@ private fun ImageFrame(
                 bitmap = image,
                 contentDescription = contentDescription,
                 modifier = Modifier.fillMaxSize(),
-                contentScale = contentScale
+                contentScale = contentScale,
+                alignment = imageAlignment
             )
         } else if (failed && fallback != null) {
             Icon(

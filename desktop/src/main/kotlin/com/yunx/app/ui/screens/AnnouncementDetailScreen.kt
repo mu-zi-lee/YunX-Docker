@@ -1,9 +1,12 @@
 package com.yunx.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,7 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.Visibility
@@ -129,6 +131,7 @@ fun AnnouncementDetailPage(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AnnouncementDetailContent(
     item: AnnouncementApi.Announcement,
@@ -250,21 +253,45 @@ private fun AnnouncementDetailContent(
             }
         }
 
-        // 正文多图（服务端 images 数组）：作图片集附在正文之后，同样是图床直链、直接加载
+        // 正文多图（服务端 images 数组）：作图片集附在正文之后，同样是图床直链、直接加载。
+        // 多张时统一行高、宽度按各自比例，横向排布、放不下自动换行（FlowRow）；
+        // 单张时沿用自适应高度，避免竖长图被压成很窄的一条。
         if (item.images.isNotEmpty()) {
-            items(item.images) { imageUrl ->
-                RemoteImage(
-                    url = imageUrl,
-                    contentDescription = null,
-                    shape = MaterialTheme.shapes.large,
-                    contentScale = ContentScale.Fit,
-                    autoHeight = true,
-                    onClick = { onImageClick(imageUrl) },
-                    modifier = Modifier
-                        .widthIn(max = DetailImageMaxWidth)
-                        .padding(top = 12.dp)
-                        .heightIn(max = maxImageHeight)
-                )
+            item(key = "images") {
+                if (item.images.size == 1) {
+                    val imageUrl = item.images.first()
+                    RemoteImage(
+                        url = imageUrl,
+                        contentDescription = null,
+                        shape = MaterialTheme.shapes.large,
+                        contentScale = ContentScale.Fit,
+                        autoHeight = true,
+                        onClick = { onImageClick(imageUrl) },
+                        modifier = Modifier
+                            .widthIn(max = DetailImageMaxWidth)
+                            .padding(top = 12.dp)
+                            .heightIn(max = maxImageHeight)
+                    )
+                } else {
+                    FlowRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        item.images.forEach { imageUrl ->
+                            RemoteImage(
+                                url = imageUrl,
+                                contentDescription = null,
+                                shape = MaterialTheme.shapes.large,
+                                contentScale = ContentScale.Fit,
+                                fixedHeight = minOf(GalleryImageHeight, maxImageHeight),
+                                onClick = { onImageClick(imageUrl) }
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -300,3 +327,6 @@ private fun AnnouncementDetailContent(
 
 /** 详情页图片宽度上限：不占满整行更耐看（窄窗口下会被可用宽度自动收窄） */
 private val DetailImageMaxWidth = 520.dp
+
+/** 图集统一行高：多图等高横向排布（宽度按各自比例），放不下自动换行 */
+private val GalleryImageHeight = 160.dp

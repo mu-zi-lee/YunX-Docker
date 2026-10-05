@@ -26,6 +26,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
 /**
@@ -63,6 +64,12 @@ fun RemoteImage(
     fallbackTint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     autoHeight: Boolean = false,
     placeholderRatio: Float = 16f / 9f,
+    /**
+     * 固定高度模式：高度锁定为给定值、宽度按图片比例算（`高度 × 宽高比`），
+     * 供「等高横向排列、放不下再换行」的图集使用（配合 `FlowRow`）。
+     * 与 [autoHeight] 互斥（本参数非空时优先生效）；极宽的长图会把宽度夹到可用宽度、高度随之变矮。
+     */
+    fixedHeight: Dp? = null,
     /** 非空时图片可点击（如单击放大查看）：点击区 = 图片本身大小，桌面显示手型光标 */
     onClick: (() -> Unit)? = null
 ) {
@@ -89,6 +96,32 @@ fun RemoteImage(
         }
     }
     val image = bitmap
+
+    val fixedH = fixedHeight
+    if (fixedH != null) {
+        // 等高模式：高度固定为 fixedH，宽度按图片比例；超过可用宽度时夹住、高度随之变矮（超宽长图不溢出）
+        BoxWithConstraints(modifier = modifier.then(clickModifier), contentAlignment = Alignment.Center) {
+            val ratio = if (image != null && image.height > 0) {
+                image.width.toFloat() / image.height.toFloat()
+            } else {
+                placeholderRatio
+            }
+            val natural = if (ratio > 0f) fixedH * ratio else fixedH
+            val width = if (constraints.hasBoundedWidth) minOf(natural, maxWidth) else natural
+            val height = if (ratio > 0f) width / ratio else fixedH
+            ImageFrame(
+                image = image,
+                failed = failed,
+                contentDescription = contentDescription,
+                shape = shape,
+                contentScale = contentScale,
+                fallback = fallback,
+                fallbackTint = fallbackTint,
+                modifier = Modifier.size(width, height)
+            )
+        }
+        return
+    }
 
     if (autoHeight) {
         // 容器包裹图片本身（不强制撑满可用宽度）：底框宽度 == 实际绘制宽度，

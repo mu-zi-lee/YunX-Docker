@@ -67,6 +67,10 @@ interface DownloadTaskDao {
     suspend fun updateError(id: Long, errorMsg: String)
     suspend fun complete(id: Long, status: Int, savePath: String, avgSpeed: Long = 0L)
     suspend fun delete(id: Long)
+    /** 记录外部下载引擎（Gopeed）的任务 ID；空串表示该任务回到内置下载器语义 */
+    suspend fun updateEngineTaskId(id: Long, engineTaskId: String)
+    /** 还在外部引擎里执行、需要轮询同步进度的任务（engineTaskId 非空且未完成/未失败） */
+    suspend fun listSyncableEngineTasks(): List<DownloadTaskEntity>
 }
 
 interface BookmarkDao {

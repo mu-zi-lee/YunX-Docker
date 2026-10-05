@@ -260,6 +260,21 @@ class SettingsRepository {
         }
 
     /**
+     * 下载引擎选择（见「设置 → 下载引擎」）：
+     * - [ENGINE_BUILTIN]（默认）：内置分片下载器（Range 并发 / 断点续传 / 自适应分片）；
+     * - [ENGINE_GOPEED]：外部 Gopeed 引擎（以 exe 子进程运行，通过其本地 HTTP API 驱动）。
+     * 只影响**新任务**由谁执行；已存在的任务保持原有归属。非法值（手改偏好）一律按内置处理。
+     */
+    var downloadEngine: String
+        get() = when (prefs.get("download_engine", ENGINE_BUILTIN)) {
+            ENGINE_GOPEED -> ENGINE_GOPEED
+            else -> ENGINE_BUILTIN
+        }
+        set(value) {
+            prefs.put("download_engine", if (value == ENGINE_GOPEED) ENGINE_GOPEED else ENGINE_BUILTIN)
+        }
+
+    /**
      * 重置「实验性功能」页全部设置为默认值：
      * HTTP/2 关闭、读缓冲 64KB、慢连接抢占开启（12KB/s、15s）、主页快捷方式关闭。
      * 运行时同步（HttpClients.setHttp2Enabled / DownloadTuning.applyFrom）由调用方负责。
@@ -293,6 +308,11 @@ class SettingsRepository {
         const val PROXY_MODE_SYSTEM = "system"
         /** 代理模式：手动配置代理（主机 + 端口） */
         const val PROXY_MODE_MANUAL = "manual"
+
+        /** 下载引擎：内置分片下载器（默认） */
+        const val ENGINE_BUILTIN = "builtin"
+        /** 下载引擎：外部 Gopeed 引擎（exe 子进程 + 本地 HTTP API） */
+        const val ENGINE_GOPEED = "gopeed"
 
         const val DEFAULT_DOWNLOAD_THREADS = 32
         const val MAX_DOWNLOAD_THREADS = 512

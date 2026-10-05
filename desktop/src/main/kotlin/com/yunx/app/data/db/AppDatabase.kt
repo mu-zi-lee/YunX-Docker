@@ -86,6 +86,12 @@ class AppDatabase private constructor(private val conn: Connection) {
                             it.execute("ALTER TABLE download_task ADD COLUMN shareUrl TEXT NOT NULL DEFAULT ''")
                         }
                     }
+                    // 迁移：旧库缺少 engineTaskId 列时补上（外部 Gopeed 引擎任务 ID；空串=内置下载器）
+                    runCatching {
+                        conn.createStatement().use {
+                            it.execute("ALTER TABLE download_task ADD COLUMN engineTaskId TEXT NOT NULL DEFAULT ''")
+                        }
+                    }
                     Log.i(TAG, "database opened: ${dbFile.absolutePath}")
                     return AppDatabase(conn)
                 } catch (e: Exception) {
@@ -122,7 +128,7 @@ class AppDatabase private constructor(private val conn: Connection) {
             "CREATE TABLE IF NOT EXISTS c139_account (id TEXT PRIMARY KEY NOT NULL, cookie TEXT NOT NULL, nickname TEXT NOT NULL, authorization TEXT NOT NULL, updatedAt INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS pan123_account (id TEXT PRIMARY KEY NOT NULL, accessToken TEXT NOT NULL, account TEXT NOT NULL, nickname TEXT NOT NULL, updatedAt INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS pan115_account (id TEXT PRIMARY KEY NOT NULL, cookie TEXT NOT NULL, nickname TEXT NOT NULL, updatedAt INTEGER NOT NULL)",
-            "CREATE TABLE IF NOT EXISTS download_task (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL, fileName TEXT NOT NULL, totalSize INTEGER NOT NULL, downloadedSize INTEGER NOT NULL, status INTEGER NOT NULL, errorMsg TEXT NOT NULL, savePath TEXT NOT NULL, requestHeadersJson TEXT NOT NULL DEFAULT '{}', chunkCount INTEGER NOT NULL DEFAULT 0, plannedTotalSize INTEGER NOT NULL DEFAULT 0, cleanupId TEXT NOT NULL DEFAULT '', platform TEXT NOT NULL DEFAULT '', shareUrl TEXT NOT NULL DEFAULT '', avgSpeed INTEGER NOT NULL DEFAULT 0, createTime INTEGER NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS download_task (id INTEGER PRIMARY KEY AUTOINCREMENT, url TEXT NOT NULL, fileName TEXT NOT NULL, totalSize INTEGER NOT NULL, downloadedSize INTEGER NOT NULL, status INTEGER NOT NULL, errorMsg TEXT NOT NULL, savePath TEXT NOT NULL, requestHeadersJson TEXT NOT NULL DEFAULT '{}', chunkCount INTEGER NOT NULL DEFAULT 0, plannedTotalSize INTEGER NOT NULL DEFAULT 0, cleanupId TEXT NOT NULL DEFAULT '', platform TEXT NOT NULL DEFAULT '', shareUrl TEXT NOT NULL DEFAULT '', avgSpeed INTEGER NOT NULL DEFAULT 0, engineTaskId TEXT NOT NULL DEFAULT '', createTime INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS bookmark (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, link TEXT NOT NULL, title TEXT NOT NULL, platform TEXT NOT NULL, pwd TEXT NOT NULL, category TEXT NOT NULL, createTime INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS link_history (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, url TEXT NOT NULL, title TEXT NOT NULL, platform TEXT NOT NULL, pwd TEXT NOT NULL, createTime INTEGER NOT NULL)"
         )
@@ -353,6 +359,8 @@ private class JdbcDownloadTaskDao(private val conn: Connection) : DownloadTaskDa
         // 旧库迁移期间 shareUrl 列可能尚未添加，runCatching 兜底返回空串
         shareUrl = runCatching { rs.getString("shareUrl") }.getOrDefault(""),
         avgSpeed = rs.getLong("avgSpeed"),
+        // 旧库迁移期间 engineTaskId 列可能尚未添加，runCatching 兜底返回空串
+        engineTaskId = runCatching { rs.getString("engineTaskId") }.getOrDefault(""),
         createTime = rs.getLong("createTime")
     )
 
@@ -362,8 +370,8 @@ private class JdbcDownloadTaskDao(private val conn: Connection) : DownloadTaskDa
         synchronized(conn) {
             conn.prepareStatement(
                 "INSERT INTO download_task(url,fileName,totalSize,downloadedSize,status,errorMsg,savePath," +
-                    "requestHeadersJson,chunkCount,plannedTotalSize,cleanupId,platform,shareUrl,avgSpeed,createTime) " +
-                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "requestHeadersJson,chunkCount,plannedTotalSize,cleanupId,platform,shareUrl,avgSpeed,engineTaskId,createTime) " +
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 Statement.RETURN_GENERATED_KEYS
             ).use { ps ->
                 ps.setString(1, task.url)
@@ -380,7 +388,8 @@ private class JdbcDownloadTaskDao(private val conn: Connection) : DownloadTaskDa
                 ps.setString(12, task.platform)
                 ps.setString(13, task.shareUrl)
                 ps.setLong(14, task.avgSpeed)
-                ps.setLong(15, task.createTime)
+                ps.setString(15, task.engineTaskId)
+                ps.setLong(16, task.createTime)
                 ps.executeUpdate()
                 ps.generatedKeys.use { gk -> if (gk.next()) gk.getLong(1) else task.id }
             }
@@ -490,6 +499,32 @@ private class JdbcDownloadTaskDao(private val conn: Connection) : DownloadTaskDa
             }
         }
         reload()
+    }
+
+    override suspend fun updateEngineTaskId(id: Long, engineTaskId: String) = dbIo {
+        synchronized(conn) {
+            conn.prepareStatement("UPDATE download_task SET engineTaskId = ? WHERE id = ?").use { ps ->
+                ps.setString(1, engineTaskId)
+                ps.setLong(2, id)
+                ps.executeUpdate()
+            }
+        }
+        reload()
+    }
+
+    override suspend fun listSyncableEngineTasks(): List<DownloadTaskEntity> = dbIo {
+        synchronized(conn) {
+            // 还在引擎里跑（未完成、未失败）且带引擎任务 ID 的记录：进度由同步协程逐条轮询回写
+            conn.prepareStatement(
+                "SELECT * FROM download_task WHERE engineTaskId != '' AND status != 3 AND status != 4"
+            ).use { ps ->
+                ps.executeQuery().use { rs ->
+                    val out = mutableListOf<DownloadTaskEntity>()
+                    while (rs.next()) out += readTask(rs)
+                    out
+                }
+            }
+        }
     }
 }
 

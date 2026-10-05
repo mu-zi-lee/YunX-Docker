@@ -63,6 +63,7 @@ import com.yunx.app.data.backup.AuthBackupManager
 import com.yunx.app.data.db.AppDatabase
 import com.yunx.app.data.download.ChunkDownloader
 import com.yunx.app.data.download.DownloadManager
+import com.yunx.app.data.gopeed.GopeedEngine
 import com.yunx.app.data.network.BaiduApi
 import com.yunx.app.data.network.C139Api
 import com.yunx.app.data.network.GitHubApi
@@ -114,6 +115,7 @@ import com.yunx.app.ui.screens.AnnouncementScreen
 import com.yunx.app.ui.screens.AnnouncementUnreadBadge
 import com.yunx.app.ui.screens.BookmarkScreen
 import com.yunx.app.ui.screens.DownloadScreen
+import com.yunx.app.ui.screens.DownloadEngineScreen
 import com.yunx.app.ui.screens.DriveScreen
 import com.yunx.app.ui.screens.ExperimentalFeaturesScreen
 import com.yunx.app.ui.screens.OnboardingScreen
@@ -178,6 +180,7 @@ fun MainScreen(
     var showTheme by rememberSaveable { mutableStateOf(false) }
     var showBookmarks by rememberSaveable { mutableStateOf(false) }
     var showExperimental by rememberSaveable { mutableStateOf(false) }
+    var showDownloadEngine by rememberSaveable { mutableStateOf(false) }
     var showAnnouncements by rememberSaveable { mutableStateOf(false) }
     /** 启动公告弹窗点「查看详情」时带进去的公告 id（null = 从图标进来先看列表） */
     var announcementDetailId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -261,7 +264,9 @@ fun MainScreen(
             speedLimitProvider = { settings.downloadSpeedLimit },
             retryCountProvider = { settings.downloadRetryCount },
             keepAwakeProvider = { settings.keepAwakeWhileDownloading },
-            showSpeedProvider = { settings.notificationShowSpeed }
+            showSpeedProvider = { settings.notificationShowSpeed },
+            // 下载引擎开关：选了 Gopeed 时新任务交给外部引擎（还需内核已导入、平台非 GitHub）
+            engineEnabledProvider = { settings.downloadEngine == SettingsRepository.ENGINE_GOPEED }
         )
     }
 
@@ -613,6 +618,9 @@ fun MainScreen(
     val popupAnnouncement by announcementViewModel.popup.collectAsState()
     LaunchedEffect(Unit) { announcementViewModel.checkStartup() }
 
+    // 启动时同步一次「Gopeed 内核是否已导入」（进程内状态与磁盘事实对齐，供引擎页与分流判断使用）
+    LaunchedEffect(Unit) { GopeedEngine.syncInstalledState() }
+
     // 主框架与全屏覆盖层（关于页等）放在同一 Box：覆盖层带过渡动画
     Box(modifier = Modifier.fillMaxSize()) {
         // 根部提供主题内容色：M3 的 LocalContentColor 默认是 Color.Black（不随主题翻转），
@@ -764,6 +772,7 @@ fun MainScreen(
                             onAboutClick = { showAbout = true },
                             onSupportClick = { showSupport = true },
                             onExperimentalClick = { showExperimental = true },
+                            onDownloadEngineClick = { showDownloadEngine = true },
                             backupManager = backupManager,
                             onDownloadUpdateApk = { url, name, fallbackUrl ->
                                 scope.launch {
@@ -885,6 +894,16 @@ fun MainScreen(
                     resolveViewModel.startResolve(link, pwd)
                 }
             )
+        }
+
+        // 下载引擎：叠加覆盖层（二级页，从设置页进入）
+        AnimatedVisibility(
+            visible = showDownloadEngine,
+            enter = fadeIn(tween(220)) + scaleIn(tween(220), initialScale = 0.96f),
+            exit = fadeOut(tween(160)) + scaleOut(tween(160), targetScale = 0.96f),
+            modifier = Modifier.fillMaxSize()
+        ) {
+            DownloadEngineScreen(onBack = { showDownloadEngine = false })
         }
 
         // 应用内公告：叠加覆盖层（列表 ↔ 详情在页面内部切换）

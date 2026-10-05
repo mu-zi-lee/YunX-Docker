@@ -115,6 +115,8 @@ fun SettingsScreen(
     onSupportClick: () -> Unit,
     /** 打开「实验性功能」二级页 */
     onExperimentalClick: () -> Unit,
+    /** 打开「下载引擎」二级页（内置分片下载器 / 外部 Gopeed 引擎） */
+    onDownloadEngineClick: () -> Unit,
     backupManager: AuthBackupManager,
     /** 用应用内置下载器下载更新包；fallbackUrl 非空时作为镜像下载失败后的直连回退（URL + 文件名 + 回退直连） */
     onDownloadUpdateApk: (url: String, fileName: String, fallbackUrl: String?) -> Unit,
@@ -415,6 +417,16 @@ fun SettingsScreen(
             title = "实验性功能",
             description = "HTTP/2、下载读缓冲、慢连接抢占、主页快捷方式等高风险参数",
             onClick = onExperimentalClick
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // 下载引擎二级页：内置分片下载器 ↔ 外部 Gopeed 引擎（仅影响新任务）
+        SettingsItem(
+            icon = Icons.Outlined.Speed,
+            title = "下载引擎",
+            description = "切换内置分片下载器 / Gopeed 引擎（引擎不支持限速、重试与镜像回退）",
+            onClick = onDownloadEngineClick
         )
 
         Spacer(modifier = Modifier.height(8.dp))

@@ -98,6 +98,11 @@ data class DownloadTaskEntity(
     val shareUrl: String = "",
     /** 下载完成时的平均速度（字节/秒）；完成态展示用，进行中为 0 */
     val avgSpeed: Long = 0,
+    /**
+     * 外部下载引擎（Gopeed）的任务 ID；空串 = 由内置分片下载器执行。
+     * 非空时该任务的进度由引擎同步协程回写，暂停 / 继续 / 删除都要转发给引擎。
+     */
+    val engineTaskId: String = "",
     val createTime: Long = System.currentTimeMillis()
 ) {
     companion object {

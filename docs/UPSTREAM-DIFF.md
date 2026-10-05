@@ -179,7 +179,7 @@
 
 ### 9.5 本次对齐（上游 `989a6d7`）
 
-本轮覆盖上游 `561dd10`(#138) / `6265668`(#141) / `989a6d7`(#142)。
+本轮覆盖上游 `561dd10`(#138) / `989a6d7`(#142)；`6265668`(#141) 的 Gopeed 引擎另见 §9.6（桌面以 exe 子进程形态重做）。
 
 #### 已移植
 
@@ -193,7 +193,28 @@
 | 上游提交/内容 | 原因 |
 | --- | --- |
 | `561dd10`(#138) README contributors | 上游仓库 README 专属章节；桌面 README 独立维护。 |
-| `6265668`(#141) 内置 Gopeed 下载引擎 | Android 专属：依赖 gomobile 编译的 `libgojni.so`（AAR 导入 + `System.load`）、SAF tree Uri 反解真实路径、前台服务保活、`DownloadEngineScreen` 引擎页、`StorageDirs`/`PermissionState`。桌面已有自研分片下载引擎（Range 并发 / 断点续传 / 自适应分片）与原生下载目录选择，无对应形态。 |
-| `6265668`(#141) `UpdateChecker` 仓库参数化 / Asset size·digest | 为 Gopeed 内核仓库（`CYQawa/yunx_gopeed_build`）服务；桌面更新检测只针对本项目 Release，无第二仓库需求。 |
+| `6265668`(#141) `UpdateChecker` 仓库参数化 / Asset size·digest | 为 Gopeed 内核仓库（`CYQawa/yunx_gopeed_build`）服务；桌面内核取自 Gopeed 官方 Release，改为在 `GopeedKernelProvisioner` 内部自行解析（含 `digest` 校验），不动既有的应用更新检查链路。 |
+
+### 9.6 本次对齐（上游 `6265668` 的 Gopeed 引擎，桌面重做）
+
+上游 `6265668`(#141)「内置 Gopeed 下载引擎」在桌面**以完全不同的形态落地**：上游把 gomobile 编译的
+`libgojni.so` 用 `System.load` 装进本进程、配 `apiEnable=false` 走进程内 `rest.Dispatch`；
+桌面没有 Windows 内核库（内核仓库只有 4 个 Android ABI 的 AAR，无 exe/dll），改为把 Gopeed 官方
+**无界面 web/服务端版 `gopeed.exe` 作为子进程**拉起，走它的本地 HTTP API。
+
+#### 已移植
+
+| 上游提交 | 内容 | 桌面实现与取舍 |
+| --- | --- | --- |
+| `6265668`(#141) | 内置 Gopeed 下载引擎（双下载器并存 + 内核获取） | **引擎进程** `data/gopeed/GopeedEngine.kt`：内核为 `gopeed.exe`，落 `<dataDir>/gopeed/{bin,storage,tmp}`；以 `-A 127.0.0.1 -P <随机空闲端口> -d <storage> --temp-dir <tmp>` 启动，**不设 `-p` 密码 ⇒ 服务端不启用 Web 鉴权、无需 apiToken**；JDK 17 在 Windows 默认以 `CREATE_NO_WINDOW` 创建子进程（仅显式继承 stdio 时才清除），**不会冒出控制台黑窗**，stdout/stderr 重定向到 `gopeed.log`；启动后轮询 `/api/v1/info` 确认就绪（上限 20s）；pid 落文件，启动时按「pid 存活且可执行路径就是本应用内核」精确清理上次强杀留下的孤儿进程（避免它占着 bolt 存储锁）；注册 JVM 关闭钩子，退出应用时停引擎。**API 客户端**：专用 OkHttp 客户端 **`Proxy.NO_PROXY`**（否则用户配了代理时本地请求会被代理走），信封 `{code,msg,data}`，`code != 0` 取 `msg` 抛错；接口与上游一致：`GET /api/v1/info`、`POST /api/v1/tasks`、`GET /api/v1/tasks/{id}/status`、`PUT .../pause`、`PUT .../continue`、`DELETE /api/v1/tasks/{id}`；建任务体 `{"req":{"url","extra":{"header":{…}},"labels":{"yunxTaskId":…}},"opts":{"path","name","extra":{"connections":N}}}`，**`data` 是任务 ID 字符串**（与查询类接口的对象不同）。**内核获取** `GopeedKernelProvisioner`：从 **Gopeed 官方 Release** 取 `gopeed-web-<tag>-windows-{amd64,arm64}.zip`（按 `os.arch` 映射），下载走 `HttpClients.downloadClient`（跟随代理）、镜像前缀复用「GitHub 下载镜像」设置且失败自动回退直连、按 Release 的 `digest` 校验 sha256（长度非 64 则跳过）后解包导入，结束删除临时包；也支持导入本地 `.zip` / `.exe`。**DB/设置**：`download_task` 增 `engineTaskId`（DDL + ALTER 迁移 + `readTask` 容错 + `insert` 16 占位符）、`DownloadTaskDao` 增 `updateEngineTaskId` / `listSyncableEngineTasks`；设置增 `download_engine`（`builtin` 默认 / `gopeed`）。**下载管理** `DownloadManager`：`enqueue` 末尾统一分流（**平台非 GitHub** + 选了 Gopeed + 内核已导入才走引擎，GitHub 因引擎无法镜像回退仍走内置）；`engineTaskId` 非空的任务其 `start`/`pause`/`remove` 分别转发 `continue`/`pause`/`delete`（绝不落到内置下载器重复下载）；1s 轮询 `/status` 回写进度与 `_stats`（`ready/running/wait` 视为下载中、`done` 完成并写平均速度与清理回调、`error` 置失败、`pause` 置暂停），保活与 Windows 通知沿用既有 `onTaskStarted/onTaskFinished`/`notifyProgress`（引用计数保证恰好配对）；落盘目录沿用设置里的自定义下载目录或系统「下载」目录，路径经 `DownloadPathPolicy.sanitize` 净化（防穿越/非法字符）。**UI** `ui/screens/DownloadEngineScreen.kt`：设置 → 「下载引擎」二级页，展示引擎状态 / 内核体积与核心版本 / 落盘目录，提供「从官方下载内核」「导入本地内核」「重启引擎」「更换内核」「删除内核」与引擎切换（切到 Gopeed 前要求内核已导入）；内核下载进度用**窗口内 `FadeAlertDialog`**（按项目约定，且刻意不可取消）；失败原因用 `SelectionContainer` 原文可复制。 |
+| `6265668`(#141) 桌面差异 | Android 专属能力 | **去掉**：AAR 导入与 `System.load`、SAF tree Uri 反解、存储权限三态与「所有文件访问」引导、前台服务保活（桌面由 `WindowsKeepAwake` + 通知中心承担）、`DownloadEngineScreen` 里的「更新内核」入口（需先删后导）。**差异**：引擎不支持的「下载限速 / 失败重试 / 最大同时下载任务数 / GitHub 镜像回退」在桌面仍保留设置项（内置下载器继续使用），已在引擎页与设置项描述里注明「引擎不支持」；引擎内核版本号在官方包名里（`tag`），运行中经 `/api/v1/info` 读取展示。 |
+
+#### 验证
+
+- `gradle :desktop:compileKotlin` 通过。
+- REST 契约（路由表 / 建任务请求体 / 状态字段 / `data` 为字符串）逐条核对 Gopeed 官方源码
+  （`pkg/api/service.go`、`pkg/rest/server.go`、`cmd/web/flags.go`）确认。
+- **未做端到端真机验证**：内核下载与引擎进程运行需联网拉取 ~40MB 官方包，尚未实跑；
+  首次使用建议按「从官方下载内核」→ 切换引擎 → 下载一个小文件 → 暂停/继续/删除 全流程自测。
 
 

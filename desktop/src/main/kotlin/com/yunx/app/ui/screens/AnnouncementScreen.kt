@@ -96,6 +96,8 @@ fun AnnouncementScreen(
                 state = detailState,
                 onBack = { detailId = null },
                 onRetry = { viewModel.retryDetail() },
+                // 详情页右上角刷新：保留旧内容重拉（作废该条详情缓存）
+                onRefresh = { viewModel.reloadCurrentDetail() },
                 modifier = Modifier.fillMaxSize()
             )
         }

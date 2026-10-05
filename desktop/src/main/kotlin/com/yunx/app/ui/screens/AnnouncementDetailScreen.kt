@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -71,6 +72,8 @@ fun AnnouncementDetailPage(
     state: AnnouncementViewModel.DetailUiState,
     onBack: () -> Unit,
     onRetry: () -> Unit,
+    /** 右上角刷新：保留旧内容重拉（服务端改了正文时不必退出重进） */
+    onRefresh: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     // 独立全屏覆盖页：自带 Snackbar 宿主（覆盖层会遮挡主页 Scaffold 的 SnackbarHost）
@@ -89,6 +92,11 @@ fun AnnouncementDetailPage(
                     navigationIcon = {
                         IconButton(onClick = onBack) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = onRefresh) {
+                            Icon(Icons.Outlined.Refresh, contentDescription = "刷新")
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -142,6 +150,10 @@ private fun AnnouncementDetailContent(
     // 正文排版与 README 预览共用同一份紧凑字号（见 ui/theme/Type.kt）
     val typography = remember { compactMarkdownTypography() }
     val publisher = item.publisher.name.ifBlank { item.author }
+    // 封面已单独展示：images 里若重复包含封面则不重复渲染（上游 #143 同口径）
+    val galleryImages = remember(item.images, item.coverImage) {
+        item.images.filter { it != item.coverImage }
+    }
 
     LazyColumn(
         modifier = modifier.fillMaxSize(),
@@ -256,10 +268,10 @@ private fun AnnouncementDetailContent(
         // 正文多图（服务端 images 数组）：作图片集附在正文之后，同样是图床直链、直接加载。
         // 多张时统一行高、宽度按各自比例，横向排布、放不下自动换行（FlowRow）；
         // 单张时沿用自适应高度，避免竖长图被压成很窄的一条。
-        if (item.images.isNotEmpty()) {
+        if (galleryImages.isNotEmpty()) {
             item(key = "images") {
-                if (item.images.size == 1) {
-                    val imageUrl = item.images.first()
+                if (galleryImages.size == 1) {
+                    val imageUrl = galleryImages.first()
                     RemoteImage(
                         url = imageUrl,
                         contentDescription = null,
@@ -280,7 +292,7 @@ private fun AnnouncementDetailContent(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        item.images.forEach { imageUrl ->
+                        galleryImages.forEach { imageUrl ->
                             RemoteImage(
                                 url = imageUrl,
                                 contentDescription = null,

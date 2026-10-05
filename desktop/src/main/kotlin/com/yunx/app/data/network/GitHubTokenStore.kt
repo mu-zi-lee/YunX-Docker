@@ -26,6 +26,12 @@ object GitHubTokenStore {
         return runCatching { cipher.decrypt(stored, PURPOSE) }
             .getOrNull()
             ?.takeIf { it.isNotBlank() }
+            // 解密失败自愈（对齐上游 #144 口径）：密钥文件丢失/轮换后，这段密文永远解不开，
+            // 留着只会每次读取都失败；清掉它，UI 才会如实显示「未配置 Token」并允许重新填写。
+            ?: run {
+                AppContext.miscPrefs.remove(KEY_TOKEN)
+                null
+            }
     }
 
     /** 设置/更新 Token；传 null 或空串则清除 */

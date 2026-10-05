@@ -772,9 +772,10 @@ fun MainScreen(
 
     /**
      * 启动自动检查更新（整个会话只跑一次）。
-     * 静默口径：网络失败 / 已是最新 / 用户点过「忽略本次」的版本 都不打扰；
+     * 静默口径：网络失败 / 已是最新 / 用户点过「不再提示该版本」的版本 都不打扰；
      * 只有确实有更新的版本才把 [startupUpdateRelease] 置上，由根部的更新弹窗展示。
-     * 「忽略本次」写入的 `ignored_version` 与设置页手动检查时是同一个键。
+     * 「不再提示该版本」写入的 `ignored_version`（按 tag 记住）与设置页手动检查时是同一个键，
+     * 只跳过这一个版本，将来发布更新的版本仍会提示。
      */
     LaunchedEffect(Unit) {
         val release = runCatching {
@@ -1289,7 +1290,8 @@ fun MainScreen(
                     },
                     onLater = { startupUpdateRelease = null },
                     onIgnore = {
-                        // 与设置页「忽略本次」同一个键：下次启动不再为这个版本弹窗
+                        // 与设置页「不再提示该版本」同一个键：按 tag 记住，之后不再为这个版本弹窗
+                        // （将来有更新的版本仍会提示，不是全局关闭更新检查）
                         AppContext.miscPrefs.put("ignored_version", release.tagName)
                         startupUpdateRelease = null
                     }

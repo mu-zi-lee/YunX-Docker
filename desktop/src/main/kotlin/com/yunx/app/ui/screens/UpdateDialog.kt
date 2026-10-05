@@ -35,7 +35,7 @@ import com.yunx.app.ui.components.GitHubMarkdownImageTransformer
 import com.yunx.app.ui.theme.compactMarkdownTypography
 
 /**
- * 发现新版本弹窗：标题 + 当前/最新版本 + 更新说明（Markdown 渲染、可滚动限高）+ 下载更新 / 稍后 / 忽略本次。
+ * 发现新版本弹窗：标题 + 当前/最新版本 + 更新说明（Markdown 渲染、可滚动限高）+ 下载更新 / 稍后 / 不再提示该版本。
  *
  * 桌面版同时提供「安装版(.exe)」和「便携版(.zip)」两个下载入口，
  * 由用户按需选择；若某个类型在 Release 中不存在，则不显示对应按钮。
@@ -222,8 +222,10 @@ fun UpdateDialog(
             }
         },
         dismissButton = {
+            // 「不再提示该版本」= 按版本记住（写入 ignored_version），只跳过这一个 tag；
+            // 将来发布更新的版本仍会提示。文案直说范围，避免被理解成「以后再也不用检查更新」。
             TextButton(onClick = onIgnore) {
-                Text("忽略本次", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("不再提示该版本", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     )

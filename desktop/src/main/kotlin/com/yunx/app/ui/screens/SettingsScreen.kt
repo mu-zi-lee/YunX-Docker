@@ -628,6 +628,7 @@ fun SettingsScreen(
             },
             onLater = { updateRelease = null },
             onIgnore = {
+                // 「不再提示该版本」：按 tag 记住，之后启动检查也会跳过它（将来有更新的版本仍会提示）
                 AppContext.miscPrefs.put("ignored_version", release.tagName)
                 updateRelease = null
             }

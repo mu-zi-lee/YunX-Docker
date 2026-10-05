@@ -22,6 +22,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.CloudDownload
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Memory
@@ -57,6 +58,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.yunx.app.data.gopeed.GopeedEngine
 import com.yunx.app.data.gopeed.GopeedKernelProvisioner
@@ -66,7 +68,9 @@ import com.yunx.app.ui.SnackbarController
 import com.yunx.app.ui.components.FadeAlertDialog
 import com.yunx.app.ui.rememberGlobalSnackbarHostState
 import com.yunx.app.util.DesktopActions
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -96,8 +100,10 @@ fun DownloadEngineScreen(
     // 内核信息（版本需要联网询问引擎，仅在运行中才有值）
     var kernelVersion by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
-    // 内核获取进度（非空时显示不可取消的进度弹窗）
+    // 内核获取进度（非空时显示进度弹窗，弹窗内可「取消」）
     var progress by remember { mutableStateOf<GopeedKernelProvisioner.Progress?>(null) }
+    // 正在跑的内核获取协程：取消按钮据此中断（下载循环里检查取消，随即清掉半截包）
+    var provisionJob by remember { mutableStateOf<Job?>(null) }
     var failure by remember { mutableStateOf<String?>(null) }
     // 「导入本地内核」与「删除内核」的确认
     var showImportMenu by remember { mutableStateOf(false) }
@@ -113,27 +119,38 @@ fun DownloadEngineScreen(
         }
     }
 
-    /** 拉取内核版本（引擎未运行时先启动一次；失败静默，版本号不是关键信息） */
+    /** 读取内核版本（引擎没在跑就不读——绝不为了显示版本号把引擎进程拉起来） */
     fun refreshVersion() {
         scope.launch {
-            val v = withContext(Dispatchers.IO) {
+            kernelVersion = withContext(Dispatchers.IO) {
                 runCatching {
-                    if (GopeedEngine.state.value != GopeedEngine.State.RUNNING) {
-                        GopeedEngine.start(DesktopActions.defaultDownloadDir)
-                    }
+                    if (GopeedEngine.state.value != GopeedEngine.State.RUNNING) return@runCatching null
                     GopeedEngine.version()
                 }.getOrNull()
             }
-            kernelVersion = v
         }
     }
 
-    /** 从官方 Release 下载内核 */
+    /** 启动引擎并读取核心版本（只在用户把下载引擎切到 Gopeed 时调用） */
+    fun startEngineAndReadVersion() {
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    GopeedEngine.start(DesktopActions.defaultDownloadDir)
+                    GopeedEngine.version()
+                }
+            }
+            result.onSuccess { kernelVersion = it }
+                .onFailure { failure = it.message ?: it.javaClass.simpleName }
+        }
+    }
+
+    /** 从官方 Release 下载内核（可取消；取消后清掉半截包） */
     fun downloadKernel() {
         if (busy) return
         busy = true
         failure = null
-        scope.launch {
+        provisionJob = scope.launch {
             try {
                 GopeedKernelProvisioner.provision(
                     mirrorPrefix = settingsRepo.githubMirrorPrefix
@@ -141,13 +158,23 @@ fun DownloadEngineScreen(
                 progress = null
                 SnackbarController.show("Gopeed 内核已就绪")
                 refreshVersion()
+            } catch (e: CancellationException) {
+                progress = null
+                SnackbarController.show("已取消内核下载")
+                throw e
             } catch (e: Exception) {
                 progress = null
                 failure = e.message ?: e.javaClass.simpleName
             } finally {
                 busy = false
+                provisionJob = null
             }
         }
+    }
+
+    /** 取消正在进行的内核下载（下载循环每轮都检查取消，能较快停下并删除半截包） */
+    fun cancelKernelDownload() {
+        provisionJob?.cancel()
     }
 
     /** 导入本地内核（官方 zip 或裸 gopeed.exe） */
@@ -186,7 +213,9 @@ fun DownloadEngineScreen(
             if (target == SettingsRepository.ENGINE_GOPEED) "已切换到 Gopeed 引擎（仅影响新任务）"
             else "已切换到内置下载器（仅影响新任务）"
         )
-        if (target == SettingsRepository.ENGINE_GOPEED) refreshVersion()
+        // ★ 只在「切到 Gopeed 引擎」这一时刻把引擎进程拉起来：下载/导入内核、进入本页都不提前启动。
+        // 引擎没起来时读不到核心版本号，属正常（不是失败）。
+        if (target == SettingsRepository.ENGINE_GOPEED) startEngineAndReadVersion()
     }
 
     Scaffold(
@@ -372,7 +401,8 @@ fun DownloadEngineScreen(
         }
     }
 
-    // 内核获取进度：故意不可取消（下载/校验/解包中途放弃会留下半截内核）
+    // 内核获取进度：下载阶段可「取消」；下载期间可复制「加速链接 / 直链」。
+    // 校验/解包阶段不给取消（那两步很快，且中途放弃会留下解包了一半的内核）。
     progress?.let { p ->
         FadeAlertDialog(
             visible = true,
@@ -408,9 +438,33 @@ fun DownloadEngineScreen(
                             Text(text = p.message.ifBlank { "请稍候…" }, style = MaterialTheme.typography.bodySmall)
                         }
                     }
+                    // 下载地址（解析完成后才有）：镜像「加速链接」是实际使用的地址，直链可复制备用
+                    if (p.stage == GopeedKernelProvisioner.Stage.DOWNLOADING &&
+                        (p.url.isNotBlank() || p.directUrl.isNotBlank())
+                    ) {
+                        Spacer(Modifier.height(14.dp))
+                        if (p.url.isNotBlank()) {
+                            KernelLinkRow("加速链接", p.url) {
+                                DesktopActions.copyToClipboard(it)
+                                SnackbarController.show("已复制加速链接")
+                            }
+                        }
+                        if (p.directUrl.isNotBlank()) {
+                            Spacer(Modifier.height(4.dp))
+                            KernelLinkRow("直链", p.directUrl) {
+                                DesktopActions.copyToClipboard(it)
+                                SnackbarController.show("已复制直链")
+                            }
+                        }
+                    }
                 }
             },
-            confirmButton = {}
+            confirmButton = {
+                // 只在下载阶段给「取消」
+                if (p.stage == GopeedKernelProvisioner.Stage.DOWNLOADING) {
+                    TextButton(onClick = { cancelKernelDownload() }) { Text("取消") }
+                }
+            }
         )
     }
 
@@ -482,6 +536,33 @@ fun DownloadEngineScreen(
                 TextButton(onClick = { showDeleteConfirm = false }) { Text("取消") }
             }
         )
+    }
+}
+
+/** 弹窗里的一行下载地址：小字单行省略显示 + 一键复制 */
+@Composable
+private fun KernelLinkRow(label: String, url: String, onCopy: (String) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = url,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        IconButton(onClick = { onCopy(url) }, modifier = Modifier.size(28.dp)) {
+            Icon(
+                imageVector = Icons.Outlined.ContentCopy,
+                contentDescription = "复制$label",
+                modifier = Modifier.size(16.dp)
+            )
+        }
     }
 }
 

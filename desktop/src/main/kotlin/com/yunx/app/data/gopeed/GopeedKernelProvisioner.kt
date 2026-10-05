@@ -3,12 +3,20 @@ package com.yunx.app.data.gopeed
 import com.yunx.app.data.network.HttpClients
 import com.yunx.app.data.update.UpdateChecker
 import com.yunx.app.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
+import java.io.RandomAccessFile
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.coroutineContext
 
 /**
  * Gopeed 内核（Windows exe）的云端获取：从 **Gopeed 官方 Release** 拉取
@@ -30,6 +38,11 @@ object GopeedKernelProvisioner {
     private const val ASSET_PREFIX = "gopeed-web-"
     private const val ASSET_ARCH_SUFFIX = ".zip"
 
+    /** 内核包并行下载连接数（Range 分片并发）；服务器不支持 Range 时自动回退单连接流式下载 */
+    private const val KERNEL_CONNECTIONS = 32
+
+    private const val UA = "YunX-Desktop"
+
     /** 内核包落地的临时目录 `<dataDir>/gopeed/kernel` */
     private fun tempDir(): File = File(GopeedEngine.engineDir(), "kernel")
 
@@ -40,13 +53,17 @@ object GopeedKernelProvisioner {
      * 一次获取过程的状态快照。
      * @param downloaded/[total] 仅 [Stage.DOWNLOADING] 有意义；[total] 为 -1 表示服务端未给长度
      * @param message 失败/提示文案（各阶段可空）
+     * @param url 实际使用的下载地址（配置了镜像时是镜像地址）—— 供界面展示与「复制链接」
+     * @param directUrl GitHub 直链（回退地址）—— 供界面展示与「复制直链」
      */
     data class Progress(
         val stage: Stage,
         val downloaded: Long = 0L,
         val total: Long = -1L,
         val speed: Long = 0L,
-        val message: String = ""
+        val message: String = "",
+        val url: String = "",
+        val directUrl: String = ""
     )
 
     /** 解析出的下载计划 */
@@ -126,25 +143,29 @@ object GopeedKernelProvisioner {
     ): File {
         onProgress(Progress(Stage.RESOLVING, message = "正在获取官方内核版本…"))
         val plan = resolvePlan(mirrorPrefix)
-        onProgress(
-            Progress(Stage.DOWNLOADING, 0L, plan.size, 0L, "开始下载 ${plan.assetName}")
-        )
-        val archive = download(plan, onProgress)
+        // 下载阶段的所有进度统一带上地址：界面据此展示 / 复制「加速链接」与「直链」
+        val report: (Progress) -> Unit = { p ->
+            onProgress(
+                if (p.stage == Stage.DOWNLOADING) p.copy(url = plan.url, directUrl = plan.fallbackUrl) else p
+            )
+        }
+        report(Progress(Stage.DOWNLOADING, 0L, plan.size, 0L, "开始下载 ${plan.assetName}"))
+        val archive = download(plan, report)
 
         if (plan.digest.isNotBlank()) {
-            onProgress(Progress(Stage.VERIFYING, message = "正在校验内核完整性…"))
+            report(Progress(Stage.VERIFYING, message = "正在校验内核完整性…"))
             verifyDigest(archive, plan.digest)
         }
 
-        onProgress(Progress(Stage.INSTALLING, message = "正在解包导入内核…"))
+        report(Progress(Stage.INSTALLING, message = "正在解包导入内核…"))
         val installed = GopeedEngine.installFromArchive(archive)
         // 导入成功后删除临时包（保留会白占 ~40MB）
         runCatching { archive.delete() }
-        onProgress(Progress(Stage.DONE, message = "内核已就绪（${plan.version}）"))
+        report(Progress(Stage.DONE, message = "内核已就绪（${plan.version}）"))
         return installed
     }
 
-    /** 下载内核包到临时目录；主 URL（镜像）失败自动回退直连 */
+    /** 下载内核包到临时目录；主 URL（镜像）失败自动回退直连；用户取消时清掉半截文件 */
     private suspend fun download(plan: Plan, onProgress: (Progress) -> Unit): File = withContext(Dispatchers.IO) {
         val dir = tempDir().also { it.mkdirs() }
         val target = File(dir, plan.assetName)
@@ -156,18 +177,137 @@ object GopeedKernelProvisioner {
             if (plan.fallbackUrl.isNotBlank() && plan.fallbackUrl != plan.url) add(plan.fallbackUrl)
         }
         var lastError: Exception? = null
-        for (candidate in candidates) {
-            val result = runCatching { downloadFrom(candidate, target, plan.size, onProgress) }
-            if (result.isSuccess) return@withContext target
-            lastError = result.exceptionOrNull() as? Exception
-            Log.w(TAG, "内核下载失败，尝试下一个地址：${lastError?.message}")
+        try {
+            for (candidate in candidates) {
+                val result = runCatching {
+                    // 先试 32 路 Range 并行（快得多）；服务器不支持 Range 时回退单连接流式下载
+                    if (!downloadParallel(candidate, target, plan.size, onProgress)) {
+                        downloadFrom(candidate, target, plan.size, onProgress)
+                    }
+                }
+                if (result.isSuccess) return@withContext target
+                lastError = result.exceptionOrNull() as? Exception
+                Log.w(TAG, "内核下载失败，尝试下一个地址：${lastError?.message}")
+                runCatching { target.delete() }
+            }
+        } catch (e: CancellationException) {
+            // 用户点了「取消」：清掉半截内核再往上抛，否则下次会拿它去校验/解包
             runCatching { target.delete() }
+            throw e
         }
         throw IllegalStateException("内核下载失败：${lastError?.message ?: "未知错误"}")
     }
 
+    /**
+     * 多连接（[KERNEL_CONNECTIONS] 路）Range 并行下载。
+     *
+     * @return true = 已下载完成；false = 服务器不支持 Range（交给调用方回退单连接流式下载）
+     */
+    private suspend fun downloadParallel(
+        url: String,
+        target: File,
+        total: Long,
+        onProgress: (Progress) -> Unit
+    ): Boolean {
+        if (total <= 0L) return false
+        // 先探一次 Range：只有 206 + Content-Range 才说明服务端真的支持分片
+        val supportsRange = runCatching {
+            val probe = Request.Builder()
+                .url(url)
+                .header("User-Agent", UA)
+                .header("Range", "bytes=0-0")
+                .build()
+            HttpClients.downloadClient().newCall(probe).execute().use { resp ->
+                resp.code == 206 && !resp.header("Content-Range").isNullOrBlank()
+            }
+        }.getOrDefault(false)
+        if (!supportsRange) {
+            Log.i(TAG, "内核并行下载：服务端不支持 Range，回退单连接")
+            return false
+        }
+
+        val connections = minOf(KERNEL_CONNECTIONS.toLong(), total).toInt().coerceAtLeast(1)
+        // 预分配固定长度：各分片按绝对偏移写入，需要文件先有确定大小
+        RandomAccessFile(target, "rw").use { it.setLength(total) }
+        Log.i(TAG, "内核并行下载：url=$url 分片=$connections 总大小=$total")
+
+        val downloaded = AtomicLong(0L)
+        val startedAt = System.currentTimeMillis()
+        val reportLock = Any()
+        var lastReportAt = 0L
+
+        coroutineScope {
+            val sliceLen = total / connections
+            (0 until connections).map { index ->
+                val start = index * sliceLen
+                val end = if (index == connections - 1) total - 1 else start + sliceLen - 1
+                async(Dispatchers.IO) {
+                    downloadSlice(url, target, start, end) { delta ->
+                        val done = downloaded.addAndGet(delta)
+                        val now = System.currentTimeMillis()
+                        // 进度节流 300ms：多分片并发回调，不节流会把 UI 打爆
+                        if (now - lastReportAt >= 300L) {
+                            synchronized(reportLock) {
+                                if (now - lastReportAt >= 300L) {
+                                    lastReportAt = now
+                                    val elapsed = (now - startedAt).coerceAtLeast(1L)
+                                    onProgress(
+                                        Progress(
+                                            Stage.DOWNLOADING, done, total,
+                                            done * 1000L / elapsed, "正在下载内核…"
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }.awaitAll()
+        }
+        onProgress(Progress(Stage.DOWNLOADING, total, total, 0L, "内核下载完成"))
+        return true
+    }
+
+    /** 单个 Range 分片：每片各开一个 fd 按偏移写入（RandomAccessFile 非线程安全，不能共享） */
+    private suspend fun downloadSlice(
+        url: String,
+        target: File,
+        start: Long,
+        end: Long,
+        onBytes: (Long) -> Unit
+    ) {
+        val req = Request.Builder()
+            .url(url)
+            .header("User-Agent", UA)
+            .header("Range", "bytes=$start-$end")
+            .build()
+        HttpClients.downloadClient().newCall(req).execute().use { resp ->
+            if (resp.code != 206) throw IllegalStateException("分片请求失败 HTTP ${resp.code}")
+            val body = resp.body ?: throw IllegalStateException("响应体为空")
+            RandomAccessFile(target, "rw").use { raf ->
+                raf.seek(start)
+                body.byteStream().use { input ->
+                    val buffer = ByteArray(256 * 1024)
+                    var pos = start
+                    while (pos <= end) {
+                        // 取消（用户点「取消」/切换页面）时立刻退出，不再白下
+                        coroutineContext.ensureActive()
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        val allow = minOf(read.toLong(), end - pos + 1).toInt()
+                        if (allow <= 0) break
+                        raf.write(buffer, 0, allow)
+                        pos += allow
+                        onBytes(allow.toLong())
+                    }
+                    if (pos <= end) throw IllegalStateException("分片下载不完整（$start-$end）")
+                }
+            }
+        }
+    }
+
     /** 单地址流式下载（含速度统计），失败抛异常由调用方切换候选地址 */
-    private fun downloadFrom(
+    private suspend fun downloadFrom(
         url: String,
         target: File,
         declaredSize: Long,
@@ -175,7 +315,7 @@ object GopeedKernelProvisioner {
     ) {
         val req = Request.Builder()
             .url(url)
-            .header("User-Agent", "YunX-Desktop")
+            .header("User-Agent", UA)
             .build()
         HttpClients.downloadClient().newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) throw IllegalStateException("HTTP ${resp.code}")
@@ -189,6 +329,7 @@ object GopeedKernelProvisioner {
             target.outputStream().buffered().use { out ->
                 body.byteStream().use { input ->
                     while (true) {
+                        coroutineContext.ensureActive()
                         val read = input.read(buffer)
                         if (read <= 0) break
                         out.write(buffer, 0, read)

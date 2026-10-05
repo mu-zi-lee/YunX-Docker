@@ -261,5 +261,22 @@
 - `gradle :desktop:jar` 通过（`run.bat build`）。
 - **未做端到端真机验证**：磁力下载需可用的 Gopeed 内核与可用种子/网络（DHT/tracker）；引擎 `maxRunning` 排队与唤醒需多任务实测；均需联网自测。
 
+### 9.9 桌面 Gopeed 引擎修正（2026-10-05，非上游提交）
+
+实测发现引擎「一直没速度、像没启动」，定位到两处**桌面侧**的实现错误（上游 Android 用进程内 `rest.Dispatch` + 自带 AAR，路径与版本都不同，照抄端点会踩坑）：
+
+| 问题 | 现象 | 修正 |
+| --- | --- | --- |
+| 启动参数 `--temp-dir` 在 gopeed 服务端**不存在** | gopeed 打印 usage 后立刻退出，引擎永远起不来（却被统一报成「启动超时」） | 只传真实存在的开关 `-A 127.0.0.1 -P <port> -d <storage>`（真实开关仅 `-A/-P/-u/-p/-T/-d/-w/-c`，见上游 `cmd/web/flags.go`）；失败提示区分「进程已退出（退出码+日志路径）」与「启动超时」 |
+| 进度轮询用 `GET /api/v1/tasks/{id}/status`，而 gopeed **没有这个路由** | 状态查询永远 404 → 进度/速度永远同步不上，界面看起来像引擎没启动 | 改用 `GET /api/v1/tasks/{id}`（Task 对象）：`status`（ready/running/wait/pause/error/done）+ `progress.downloaded` / `progress.speed` + 总大小取 `meta.res.size`（Progress 里没有 total） |
+
+顺带按用户要求改了内核获取与引擎页：
+
+- **内核下载改为 32 路 Range 并行**：先探测 `Range: bytes=0-0` 是否返回 206+Content-Range，支持则按 32 个等长分片并发下载（每片各开一个 fd 按绝对偏移写入，`RandomAccessFile` 不能跨线程共享），不支持则回退单连接流式下载；进度按 300ms 节流。
+- **内核下载可取消**：进度弹窗在下载阶段提供「取消」按钮（协程取消 → 下载循环 `ensureActive()` 立即退出 → 删除半截包）；校验/解包阶段不给取消（很快，且中途放弃会留下解包一半的内核）。
+- **下载地址可见可复制**：弹窗中展示实际使用的「加速链接」（设置里的 GitHub 镜像前缀，未配置用默认镜像）与 GitHub「直链」，各带一键复制。
+- **惰性启动引擎**：只在用户把下载引擎**切换到 Gopeed** 那一刻启动进程；下载/导入内核、进入引擎页都不再提前拉起（此前 `refreshVersion()` 会顺手 `start()`）。引擎未跑时读不到核心版本号属正常。
+
+
 
 

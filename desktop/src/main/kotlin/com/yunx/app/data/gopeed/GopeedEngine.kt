@@ -367,15 +367,27 @@ object GopeedEngine {
         return id
     }
 
-    /** 查询任务状态 */
+    /**
+     * 查询任务状态（`GET /api/v1/tasks/{id}` → Task 对象）。
+     *
+     * ★ 绝不能再用上游移植过来的 `/api/v1/tasks/{id}/status`：gopeed 服务端**没有这个路由**
+     *   （真实路由只有 `/{id}` 与 `/{id}/stats`，见上游 `pkg/rest/server.go`），调用必然 404，
+     *   于是进度同步永远失败、界面一直看不到速度（看起来像引擎没启动）。
+     *   改为读 Task 对象本身：
+     *   - `status`：ready / running / wait / pause / error / done（见 `pkg/base/constants.go`）；
+     *   - `progress.downloaded` / `progress.speed`（Task 内嵌的 Progress 结构）；
+     *   - 总大小取 `meta.res.size`（Progress 里**没有** total）。
+     */
     fun taskStatus(engineTaskId: String): TaskView {
-        val data = get("/api/v1/tasks/$engineTaskId/status")
+        val data = get("/api/v1/tasks/$engineTaskId")
+        val progress = data.optJSONObject("progress")
+        val res = data.optJSONObject("meta")?.optJSONObject("res")
         return TaskView(
-            id = engineTaskId,
+            id = data.optString("id").ifBlank { engineTaskId },
             status = data.optString("status"),
-            downloaded = data.optLong("downloaded"),
-            total = data.optLong("total"),
-            speed = data.optLong("speed")
+            downloaded = progress?.optLong("downloaded") ?: 0L,
+            total = res?.optLong("size") ?: 0L,
+            speed = progress?.optLong("speed") ?: 0L
         )
     }
 

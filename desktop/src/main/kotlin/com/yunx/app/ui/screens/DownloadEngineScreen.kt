@@ -201,6 +201,22 @@ fun DownloadEngineScreen(
         }
     }
 
+    /** 停用引擎进程；若引擎里还有任务在跑则先不停（避免把正在下载的引擎任务打断） */
+    fun stopEngineIfIdle() {
+        scope.launch {
+            val active = withContext(Dispatchers.IO) {
+                runCatching { GopeedEngine.hasActiveTasks() }.getOrDefault(false)
+            }
+            if (active) {
+                SnackbarController.show("引擎仍有任务在下载，任务结束后再切换即可停用")
+                return@launch
+            }
+            withContext(Dispatchers.IO) { runCatching { GopeedEngine.stop() } }
+            kernelVersion = null
+            SnackbarController.show("已停用 Gopeed 引擎进程")
+        }
+    }
+
     /** 切换引擎（切到 Gopeed 前要求内核已导入） */
     fun switchEngine(target: String) {
         if (target == SettingsRepository.ENGINE_GOPEED && !GopeedEngine.isInstalled()) {
@@ -215,7 +231,12 @@ fun DownloadEngineScreen(
         )
         // ★ 只在「切到 Gopeed 引擎」这一时刻把引擎进程拉起来：下载/导入内核、进入本页都不提前启动。
         // 引擎没起来时读不到核心版本号，属正常（不是失败）。
-        if (target == SettingsRepository.ENGINE_GOPEED) startEngineAndReadVersion()
+        if (target == SettingsRepository.ENGINE_GOPEED) {
+            startEngineAndReadVersion()
+        } else {
+            // 切回内置下载器：引擎进程没必要继续常驻，直接停掉（内核文件保留，随时可再切回来）
+            stopEngineIfIdle()
+        }
     }
 
     Scaffold(

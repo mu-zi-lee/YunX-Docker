@@ -66,6 +66,11 @@ object GopeedEngine {
     private const val EXE_NAME = "gopeed.exe"
     private const val BIN_DIR_NAME = "bin"
 
+    /** 引擎 HTTP 协议的默认 UA（与 gopeed 自带默认一致）：任务未自带 UA 时使用，避免空 UA 被 CDN 限速 */
+    private const val DEFAULT_HTTP_UA =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
+
     /** 启动后等待 HTTP API 就绪的上限（毫秒）；冷启动解压/建库一般 1-3 秒 */
     private const val READY_TIMEOUT_MS = 20_000L
 
@@ -406,6 +411,18 @@ object GopeedEngine {
         get("/api/v1/tasks/$engineTaskId/stats").optJSONArray("connections")?.length()
     }.getOrNull()
 
+    /**
+     * 引擎里是否还有未结束的任务（ready / running / wait）。
+     * 用于「切回内置下载器时要不要停引擎」这类判断：有任务在跑就别停，否则会把它们打断。
+     */
+    fun hasActiveTasks(): Boolean = runCatching {
+        val tasks = getList("/api/v1/tasks")
+        (0 until tasks.length()).any { i ->
+            val status = tasks.optJSONObject(i)?.optString("status").orEmpty()
+            status == TaskStatus.READY || status == TaskStatus.RUNNING || status == TaskStatus.WAIT
+        }
+    }.getOrDefault(false)
+
     fun pauseTask(engineTaskId: String) {
         requestEnvelope("PUT", "/api/v1/tasks/$engineTaskId/pause", null)
     }
@@ -508,6 +525,10 @@ object GopeedEngine {
         val httpConnections = defaultHttpConnections()
         val http = protocols.optJSONObject("http") ?: JSONObject()
         http.put("connections", httpConnections)
+        // 任务没自带 UA 时（如手动粘贴直链）gopeed 会用这里的值；留空会让 CDN 收到空 UA 而被限速
+        if (http.optString("userAgent").isBlank()) {
+            http.put("userAgent", DEFAULT_HTTP_UA)
+        }
         protocols.put("http", http)
         cfg.put("protocolConfig", protocols)
         // 代理：与内置下载器保持一致（引擎默认不启用代理 ⇒ 用户配了代理时会被绕过，海外线路可能极慢）

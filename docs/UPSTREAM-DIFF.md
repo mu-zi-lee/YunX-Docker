@@ -290,6 +290,17 @@
 
 建任务时也会把实际下发的 `connections` 打进日志（`GopeedEngine` 的 `建任务：… connections=…`），便于与界面数字对照。
 
+**实测对比后的结论（2026-10-05，用户反馈：内置 30MB/s、引擎 <7MB/s）**：
+
+- 多线程参数没问题、HTTP/2 也不是原因 —— gopeed 的 transport 显式设了自定义 `DialContext` + `TLSClientConfig`，Go 在这种情况下**默认关闭 HTTP/2**（除非 `ForceAttemptHTTP2=true`），所以 32 个 Range 请求是 32 条独立 TCP 连接。
+- 差距来自**两套引擎的分片模型不同**，且 gopeed 这部分**没有对外 API**：
+  - 内置下载器是「任务池」模型：`分片数 = 线程数 × 8`（`chunkCountFor`，上限 512），worker 领完一片再领下一片，天然抗慢片拖尾；
+  - gopeed 是 1:1 分片映射（`connections` 片对 `connections` 条连接）+ slow-start 渐进放量（按批翻倍，批内全成功才放下一批）+ fast-fail 重试 + work-stealing 阈值（3s / 512KB）。这些行为由内核内部决定，REST API 只暴露 `protocolConfig.http.connections / userAgent / useServerCtime`。
+- 因此**引擎侧能做的优化已到顶**：连接数对齐设置、UA 兜底、代理同步。对速度敏感的场景建议继续用内置分片下载器（Gopeed 在 UI 上本就标注「实验性」）。
+
+**切回内置下载器时停用引擎进程**：`switchEngine` 切到 `builtin` 时调用 `stopEngineIfIdle()` → 先查 `GET /api/v1/tasks` 是否还有 ready/running/wait 任务，有则不停（避免打断正在下载的引擎任务）并提示；没有才 `GopeedEngine.stop()`。内核文件保留，随时可再切回来。
+
+
 
 
 

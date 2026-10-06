@@ -62,6 +62,11 @@ data class DownloadStats(
 
 private const val TAG = "YunX-DL"
 
+// plan.txt 解析（用于判断旧分片计划能否复用）：格式 `chunks=N total=N main=N`
+private val PLAN_CHUNKS = Regex("chunks=(\\d+)")
+private val PLAN_TOTAL = Regex("total=(\\d+)")
+private val PLAN_MAIN = Regex("main=(\\d+)")
+
 /** 单文件 Range 分片的安全并发上限。迅雷等 CDN 对单文件并发 Range 有阈值，
  *  超过约 8 个并发会把多余请求降级为 200 整文件（忽略 Range），
  *  进而触发整任务回退单流、速度暴跌。压在安全上限内，所有分片都能稳定拿到 206。 */
@@ -1122,25 +1127,38 @@ class DownloadManager(
         if (!isTaskActive()) return
 
         val threadCount = threadProvider(task.platform).coerceAtLeast(1)
-        val chunkCount = chunkCountFor(total, threadCount)
-        val chunkSize = ceil(total.toDouble() / chunkCount).toLong()
         val chunkDir = chunkDirOf(id).apply { mkdirs() }
-        // ★ 分片计划签名：part_$i 按索引命名，但区间由 chunkCount/total 推导。
-        //   若跨会话改了线程数或服务器探测大小变化 → 旧 part 区间错位 → 续传膨胀/损坏。
-        //   检测到计划不一致时整目录清空重下（旧 part 不可信）。
-        val mainPoolCount = (chunkCount * 0.7).toInt().coerceIn(1, chunkCount) // 主池片数（70%）
-        val elasticStart = mainPoolCount * chunkSize                          // 弹性区起始字节
         val planFile = File(chunkDir, "plan.txt")
-        val plan = "chunks=$chunkCount total=$total main=$mainPoolCount"
-        if (planFile.exists() && planFile.readText() != plan) {
-            Log.w(TAG, "runTask: id=$id 分片计划变化（$plan），清空旧 part 重下")
-            chunkDir.deleteRecursively()
-            chunkDir.mkdirs()
+        // ★ 分片计划：part_$i 按索引命名，但区间由 chunks/total 推导 ⇒ 计划一变旧 part 就错位、不可信。
+        //   规则：total 变了（文件被换掉）必须整目录重下；**只是线程数变了则沿用旧计划**，
+        //   避免"改一下线程数就把已下载的几 GB 全删掉重下"（这正是"自动重新下载"的来源之一）。
+        val storedPlan = planFile.takeIf { it.exists() }?.readText().orEmpty()
+        val storedTotal = PLAN_TOTAL.find(storedPlan)?.groupValues?.get(1)?.toLongOrNull()
+        val storedChunks = PLAN_CHUNKS.find(storedPlan)?.groupValues?.get(1)?.toIntOrNull()
+        val storedMain = PLAN_MAIN.find(storedPlan)?.groupValues?.get(1)?.toIntOrNull()
+        val canReusePlan = storedTotal != null && storedTotal == total &&
+            storedChunks != null && storedChunks > 0 &&
+            storedMain != null && storedMain in 1..storedChunks
+        val chunkCount: Int
+        val mainPoolCount: Int
+        if (canReusePlan) {
+            chunkCount = storedChunks!!
+            mainPoolCount = storedMain!!
+            if (chunkCount != chunkCountFor(total, threadCount)) {
+                Log.i(TAG, "runTask: id=$id 线程数已改，沿用旧分片计划续传（chunks=$chunkCount）")
+            }
         } else {
-            // 计划一致（断点续传）：主池 part_i 与弹性区 seg_{start}_{end} 均按文件已有长度续传
-            // （seg 文件名携带区间信息，downloadChunk 按长度续传，不再删除重下）
+            if (storedPlan.isNotBlank()) {
+                Log.w(TAG, "runTask: id=$id 分片计划不可复用（旧 total=$storedTotal，新 total=$total），清空旧 part 重下")
+                chunkDir.deleteRecursively()
+                chunkDir.mkdirs()
+            }
+            chunkCount = chunkCountFor(total, threadCount)
+            mainPoolCount = (chunkCount * 0.7).toInt().coerceIn(1, chunkCount) // 主池片数（70%）
+            planFile.writeText("chunks=$chunkCount total=$total main=$mainPoolCount")
         }
-        planFile.writeText(plan)
+        val chunkSize = ceil(total.toDouble() / chunkCount).toLong()
+        val elasticStart = mainPoolCount * chunkSize                          // 弹性区起始字节
         // 有效并发：仅迅雷（CDN 对单文件并发 Range 有阈值，约 8 个，超过会降级 200 整文件）封顶安全上限；
         // 其他平台保持用户设置的线程数（满并发）
         val isXunlei = headers["User-Agent"]?.contains("xunlei", ignoreCase = true) == true ||
@@ -1171,8 +1189,11 @@ class DownloadManager(
         // ★ 钳制到 total：防旧 job 残留累加导致显示"已下载 > 总大小"
         val init = minOf(downloaded.get(), total)
         downloaded.set(init)
-        // ★ 恢复时 DB 旧值可能滞后于磁盘（暂停瞬间未上报的字节）：以磁盘真实大小为准回写，避免进度回跳
-        if (init > task.downloadedSize) {
+        // ★ 以**磁盘真实长度**为准双向回写 DB：
+        //   - init > DB：恢复时 DB 滞后于磁盘（暂停瞬间未上报的字节）→ 避免进度回跳；
+        //   - init < DB：DB 残留了更高的旧值（例如上一次合并失败/中断后留下的 100%）→
+        //     必须压下来，否则界面会一直显示 100% 却实际在重新下载，看起来就是「下载到 100% 卡死」。
+        if (init != task.downloadedSize) {
             dao.updateProgress(id, DownloadTaskEntity.STATUS_DOWNLOADING, init, total)
         }
         val lastPersistAt = AtomicLong(0L)
@@ -1346,32 +1367,44 @@ class DownloadManager(
                 elasticResults.values.all { it == ChunkResult.OK }
         }
 
-        // ---------- 三种结局 ----------
+        // ---------- 收尾 ----------
         if (fallback.get()) {
             // 服务器忽略 Range：回退单条整文件流（只下一次，不按分片重复下载整文件）
             Log.w(TAG, "runTask: id=$id 回退单流整文件下载（避免重复下载整文件）")
             singleStreamFallback(id, task, headers, total, chunkDir, failReason)
             return
         }
-        if (!allOk) {
-            // 失败区间并行重试：收集主池缺失片 + 弹性区失败区间，复用 worker 池并发补下
-            val missing = buildList {
-                for (i in 0 until mainPoolCount) {
-                    val f = File(chunkDir, "part_$i")
-                    val s = i * chunkSize
-                    val e = min(s + chunkSize - 1, total - 1)
-                    if (f.length() < (e - s + 1)) add(RetryRange(s, e, f))
-                }
-                elasticResults.forEach { (key, res) ->
-                    if (res != ChunkResult.OK) {
-                        val s = key.substringBefore('_').toLong()
-                        val e = key.substringAfter('_').toLong()
-                        add(RetryRange(s, e, File(chunkDir, "seg_$key.part")))
-                    }
+        if (!allOk) Log.w(TAG, "runTask: id=$id 有分片未成功（${failReason.get()}），按缺失区间补齐")
+        // ★ 一律以「磁盘真实长度」为准收集缺失区间（不能只信 worker 的返回值）：
+        //   分片可能报了 OK 但长度不足（连接提前关闭 / 抢占竞态 / 旧 job 残留），
+        //   那种情况只在合并阶段的大小校验才会暴露，会白白多跑一轮整任务重试。
+        val missing = buildList {
+            val seen = HashSet<Long>()
+            for (i in 0 until mainPoolCount) {
+                val f = File(chunkDir, "part_$i")
+                val s = i * chunkSize
+                val e = min(s + chunkSize - 1, total - 1)
+                if (f.length() < (e - s + 1) && seen.add(s)) add(RetryRange(s, e, f))
+            }
+            // 弹性区：worker 报失败的区间（文件可能已被删除，必须以 worker 结果为准）
+            elasticResults.forEach { (key, res) ->
+                if (res != ChunkResult.OK) {
+                    val s = key.substringBefore('_').toLong()
+                    val e = key.substringAfter('_').toLong()
+                    if (seen.add(s)) add(RetryRange(s, e, File(chunkDir, "seg_$key.part")))
                 }
             }
-            Log.e(TAG, "runTask: id=$id 缺失区间 ${missing.size} 个 reason=${failReason.get()}，并行重试")
-            val retryOk = if (missing.isEmpty()) true else coroutineScope {
+            // 弹性区：磁盘上长度不足的区间（worker 报 OK 也不放行）
+            chunkDir.listFiles { f -> f.name.startsWith("seg_") && f.name.endsWith(".part") }?.forEach { f ->
+                val key = f.name.removePrefix("seg_").removeSuffix(".part")
+                val s = key.substringBefore('_').toLongOrNull() ?: return@forEach
+                val e = key.substringAfter('_').toLongOrNull() ?: return@forEach
+                if (f.length() < (e - s + 1) && seen.add(s)) add(RetryRange(s, e, f))
+            }
+        }
+        if (missing.isNotEmpty()) {
+            Log.e(TAG, "runTask: id=$id 缺失区间 ${missing.size} 个 reason=${failReason.get()}，并行补齐")
+            val retryOk = coroutineScope {
                 val retryIdx = AtomicInteger(0)
                 val retryResults = arrayOfNulls<ChunkResult?>(missing.size)
                 val retryWorkers = List(min(actualWorkers, missing.size)) {
@@ -1556,11 +1589,14 @@ class DownloadManager(
     }
 
     /**
-     * 分片流式合并 → **直接写入最终保存位置** → 完成后清空分片目录。
+     * 分片流式合并 → **直接写入最终保存位置** → 校验通过后清空分片目录。
      *
      * ★ 旧实现先合并到私有缓存 `merge/merged_$id` 再复制到目标目录，峰值占用 3 份
      *   （分片 + 合并副本 + 目标副本），大文件在磁盘吃紧时 ENOSPC，且多一次全量拷贝；
-     *   现改为边合并边删分片（见 [ChunkDownloader.mergeChunksToStream]），峰值 ≈ 1 份。
+     *   现直接写向最终目标，一次成型。
+     * ★ 合并期间**不删除分片**（见 [ChunkDownloader.mergeChunksToStream]）：合并失败/暂停时
+     *   分片仍在，重试只是重新合并一遍；若边写边删，失败后就只能整文件重下 ——
+     *   这正是「进度到 100% 卡住、随后自动重新下载」的成因。峰值磁盘占用因此 ≈ 2 份。
      * ★ 完整性校验：分片非空 + 写入字节 == total，任一不符即 abort 半成品并抛错，绝不保存损坏文件。
      */
     private suspend fun finishDownload(
@@ -1615,8 +1651,11 @@ class DownloadManager(
                 dest.commit()
                 dest.path
             } catch (e: Exception) {
-                // 失败/取消：删掉半成品，否则残留数据会一直占空间，重试时空间只减不增
+                // 失败/取消：删掉半成品目标文件；★ 分片一律保留（mergeChunksToStream 不再边写边删），
+                // 于是重试只需重新合并一遍，绝不会退化成「从头重下整个文件」
                 dest.abort()
+                // ★ 清掉内存里的「合并中」进度：否则任务失败后卡片会一直停在「合并中 100%」，看着像卡死
+                _stats.update { it + (id to DownloadStats()) }
                 throw e
             }
         }

@@ -39,6 +39,13 @@ private const val RANGE_RETRIES = 4
 internal const val BUFFER_SIZE = 64 * 1024
 
 /**
+ * 合并分片到最终文件时的顺序读写缓冲：1MB。
+ * 合并是纯本地「顺序读 + 顺序写」，缓冲区越大系统调用次数越少（1MB 比 64KB 少 16 倍），
+ * 大文件合并能明显缩短耗时；合并阶段只有一路（分片已下完），不存在内存叠加问题。
+ */
+private const val MERGE_BUFFER_SIZE = 1024 * 1024
+
+/**
  * 分片下载结果（结构化）：
  * - OK            : 该分片已正确写入「预期字节数」；
  * - RANGE_IGNORED : 服务器忽略 Range（返回 200 整文件）——上层应回退单流整文件，**绝不为单分片下载整文件**；
@@ -358,14 +365,13 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
     }
 
     /**
-     * 流式合并分片到输出流（**边写边删**）。
+     * 流式合并分片到输出流（**分片保留到合并成功**）。
      *
-     * 旧实现先把分片合并成私有缓存里的完整副本、再由 DownloadSaver 复制到最终目录，
-     * 峰值占用 3 份（分片 + 合并副本 + 目标副本），大文件在磁盘吃紧时仍 ENOSPC。
-     * 现在直接写向最终目标：每片写完立即删除，峰值占用 ≈ 文件本身大小 + 一个分片。
-     *
-     * 代价（有意取舍）：合并中途失败（含用户暂停）时已写出的分片已被删除，
-     * 下次恢复按磁盘真实长度重算进度并重下这部分，不会出现区间错位。
+     * ★ 为什么不再「边写边删」：分片是唯一的数据源，合并中途失败（磁盘满 / IO 错误 /
+     *   用户暂停 / 目标不可写）时若已把分片删掉，重试就只能**从头重下整个文件** ——
+     *   表现为「进度到 100% 后卡住，然后自动重新下载」。现在合并只读不删，
+     *   分片目录由调用方在**提交成功后**整体清空；失败重试只是重新合并一遍，成本极低。
+     *   代价：合并期间分片与目标文件同时存在，峰值 ≈ 2 份（换来的是不丢数据）。
      *
      * @param onProgress 已合并字节数回调（每写完一个分片一次）：大文件合并耗时较长，
      *                   由调用方据此上报「合并中」进度，避免界面停在 100% 像卡死。
@@ -378,7 +384,8 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
     ): Long =
         withContext(DownloadManager.chunkIoDispatcher) {
             var total = 0L
-            val buffer = ByteArray(BUFFER_SIZE)
+            // 合并是纯本地顺序读+顺序写，缓冲区开大（1MB）减少系统调用次数，明显快于 64KB
+            val buffer = ByteArray(MERGE_BUFFER_SIZE)
             chunkFiles.forEach { part ->
                 FileInputStream(part).use { fis ->
                     while (true) {
@@ -391,8 +398,7 @@ class ChunkDownloader(private val clientProvider: () -> OkHttpClient) {
                         total += read
                     }
                 }
-                // 该片已完整写入目标，立即释放分片空间（在 use 之后，确保 fd 已关闭）
-                if (!part.delete()) Log.w(TAG, "mergeChunksToStream: 删除分片失败 $part")
+                // ★ 这里刻意不删除分片：删了就没法低成本重试（见上方说明）
                 onProgress?.invoke(total)
             }
             out.flush()

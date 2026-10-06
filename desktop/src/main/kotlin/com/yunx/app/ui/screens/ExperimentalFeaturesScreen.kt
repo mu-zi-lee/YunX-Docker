@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -24,6 +25,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -39,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.yunx.app.data.download.DownloadTuning
 import com.yunx.app.data.network.HttpClients
@@ -85,6 +88,10 @@ fun ExperimentalFeaturesScreen(
     var showMinBpsDialog by remember { mutableStateOf(false) }
     var showMinAgeDialog by remember { mutableStateOf(false) }
     var showResetConfirm by remember { mutableStateOf(false) }
+    // 各弹窗里的「自定义数值」输入（每次打开弹窗清空，避免残留上次的输入）
+    var bufferCustomInput by remember { mutableStateOf("") }
+    var minBpsCustomInput by remember { mutableStateOf("") }
+    var minAgeCustomInput by remember { mutableStateOf("") }
 
     val snackbarHostState = rememberGlobalSnackbarHostState()
 
@@ -146,7 +153,10 @@ fun ExperimentalFeaturesScreen(
                 icon = Icons.Outlined.Layers,
                 title = "下载读缓冲大小",
                 description = "当前 ${bufferSize / 1024} KB（影响每个在飞分片的内存占用；新任务生效）",
-                onClick = { showBufferDialog = true }
+                onClick = {
+                    bufferCustomInput = ""
+                    showBufferDialog = true
+                }
             )
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -174,7 +184,10 @@ fun ExperimentalFeaturesScreen(
                 icon = Icons.Outlined.Tune,
                 title = "慢连接判定阈值",
                 description = "当前 ${preemptMinBps / 1024} KB/s（低于此速率的连接才判定为慢，4–256 KB/s）",
-                onClick = { showMinBpsDialog = true }
+                onClick = {
+                    minBpsCustomInput = ""
+                    showMinBpsDialog = true
+                }
             )
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -183,7 +196,10 @@ fun ExperimentalFeaturesScreen(
                 icon = Icons.Outlined.Refresh,
                 title = "慢连接判定时长",
                 description = "当前 ${preemptMinAgeMs / 1000} 秒（分片至少跑这么久才允许被抢占，5–60 秒）",
-                onClick = { showMinAgeDialog = true }
+                onClick = {
+                    minAgeCustomInput = ""
+                    showMinAgeDialog = true
+                }
             )
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -258,6 +274,24 @@ fun ExperimentalFeaturesScreen(
                         Text("$kb KB", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
+                Spacer(modifier = Modifier.height(12.dp))
+                CustomNumberRow(
+                    value = bufferCustomInput,
+                    onValueChange = { bufferCustomInput = it },
+                    label = "自定义（KB）",
+                    fallbackHint = "${bufferSize / 1024}",
+                    min = (SettingsRepository.MIN_DOWNLOAD_BUFFER_SIZE / 1024).toLong(),
+                    max = (SettingsRepository.MAX_DOWNLOAD_BUFFER_SIZE / 1024).toLong(),
+                    unit = "KB",
+                    onApply = { kb ->
+                        val bytes = (kb * 1024).toInt()
+                        bufferSize = bytes
+                        settingsRepo.downloadBufferSize = bytes
+                        DownloadTuning.applyFrom(settingsRepo)
+                        showBufferDialog = false
+                        SnackbarController.show("读缓冲已设为 $kb KB（新任务生效）")
+                    }
+                )
             }
         },
         confirmButton = {
@@ -298,6 +332,24 @@ fun ExperimentalFeaturesScreen(
                         Text("$kb KB/s", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
+                Spacer(modifier = Modifier.height(12.dp))
+                CustomNumberRow(
+                    value = minBpsCustomInput,
+                    onValueChange = { minBpsCustomInput = it },
+                    label = "自定义（KB/s）",
+                    fallbackHint = "${preemptMinBps / 1024}",
+                    min = SettingsRepository.MIN_SLOW_PREEMPT_MIN_BPS / 1024,
+                    max = SettingsRepository.MAX_SLOW_PREEMPT_MIN_BPS / 1024,
+                    unit = "KB/s",
+                    onApply = { kbps ->
+                        val bps = kbps * 1024L
+                        preemptMinBps = bps
+                        settingsRepo.slowPreemptMinBps = bps
+                        DownloadTuning.applyFrom(settingsRepo)
+                        showMinBpsDialog = false
+                        SnackbarController.show("慢连接判定阈值已设为 $kbps KB/s")
+                    }
+                )
             }
         },
         confirmButton = {
@@ -338,6 +390,24 @@ fun ExperimentalFeaturesScreen(
                         Text("$sec 秒", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
+                Spacer(modifier = Modifier.height(12.dp))
+                CustomNumberRow(
+                    value = minAgeCustomInput,
+                    onValueChange = { minAgeCustomInput = it },
+                    label = "自定义（秒）",
+                    fallbackHint = "${preemptMinAgeMs / 1000}",
+                    min = SettingsRepository.MIN_SLOW_PREEMPT_MIN_AGE_MS / 1000,
+                    max = SettingsRepository.MAX_SLOW_PREEMPT_MIN_AGE_MS / 1000,
+                    unit = "秒",
+                    onApply = { sec ->
+                        val ms = sec * 1000L
+                        preemptMinAgeMs = ms
+                        settingsRepo.slowPreemptMinAgeMs = ms
+                        DownloadTuning.applyFrom(settingsRepo)
+                        showMinAgeDialog = false
+                        SnackbarController.show("慢连接判定时长已设为 $sec 秒")
+                    }
+                )
             }
         },
         confirmButton = {
@@ -391,4 +461,55 @@ fun ExperimentalFeaturesScreen(
             TextButton(onClick = { showResetConfirm = false }) { Text("取消") }
         }
     )
+}
+
+/**
+ * 弹窗里的「自定义数值」输入行：输入框 + 「应用」按钮。
+ *
+ * 与上方的档位选择**并存**：既可以直接点档位，也可以输入一个具体数值；
+ * 只接受 `[min, max]` 闭区间内的整数，非法/越界只提示、不写入 —— 这个区间就是"合理范围"。
+ */
+@Composable
+private fun CustomNumberRow(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    /** 输入框为空时的占位提示（一般填当前值） */
+    fallbackHint: String,
+    min: Long,
+    max: Long,
+    unit: String,
+    onApply: (Long) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "或直接输入数值（$min–$max $unit）",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            OutlinedTextField(
+                value = value,
+                // 只收数字、最长 7 位：够用，也挡掉粘贴进来的超长串
+                onValueChange = { raw -> onValueChange(raw.filter { it.isDigit() }.take(7)) },
+                modifier = Modifier.weight(1f),
+                label = { Text(label) },
+                placeholder = { Text(fallbackHint) },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            TextButton(
+                onClick = {
+                    val v = value.trim().toLongOrNull()
+                    when {
+                        v == null -> SnackbarController.show("请输入数字")
+                        v < min || v > max -> SnackbarController.show("请输入 $min–$max 之间的数值（$unit）")
+                        else -> onApply(v)
+                    }
+                }
+            ) { Text("应用") }
+        }
+    }
 }

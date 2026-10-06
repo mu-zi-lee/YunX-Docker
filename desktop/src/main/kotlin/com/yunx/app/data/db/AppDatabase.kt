@@ -3,6 +3,7 @@ package com.yunx.app.data.db
 import com.yunx.app.AppContext
 import com.yunx.app.data.security.CredentialCipher
 import com.yunx.app.data.security.FileCredentialCipher
+import com.yunx.app.util.DiagnosticLog
 import com.yunx.app.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -105,6 +106,8 @@ class AppDatabase private constructor(private val conn: Connection) {
                         }
                     }
                     Log.i(TAG, "database opened: ${dbFile.absolutePath}")
+                    // 诊断模式：库开好时记一条（业务表清单 + 每张表行数）
+                    logSchema(conn)
                     return AppDatabase(conn)
                 } catch (e: Exception) {
                     lastError = e
@@ -129,6 +132,41 @@ class AppDatabase private constructor(private val conn: Connection) {
                 }
             }
             throw lastError ?: IllegalStateException("database open failed")
+        }
+
+        /**
+         * 诊断模式：记录业务表清单与每张表的行数（只在库打开那一次跑）。
+         * 排查「表不存在 / 迁移没跑 / 数据莫名清空」时这一条最有用；关着时首行短路，零开销。
+         */
+        private fun logSchema(conn: Connection) {
+            if (!DiagnosticLog.isEnabled()) return
+            runCatching {
+                val tables = mutableListOf<String>()
+                conn.createStatement().use { st ->
+                    st.executeQuery("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").use { rs ->
+                        while (rs.next()) {
+                            val name = rs.getString(1) ?: continue
+                            // sqlite 自己的内部表不算业务表
+                            if (!name.startsWith("sqlite_")) tables.add(name)
+                        }
+                    }
+                }
+                DiagnosticLog.log(
+                    DiagnosticLog.DB, "db_open",
+                    size = tables.size.toLong(),
+                    summary = "file=yunx.db | tables=${tables.joinToString(",")}"
+                )
+                // 顺手把每张表的行数也记一笔（只在诊断模式开启、且只在库打开那一次执行）
+                tables.forEach { table ->
+                    runCatching {
+                        conn.createStatement().use { st ->
+                            st.executeQuery("SELECT COUNT(*) FROM $table").use { rs ->
+                                if (rs.next()) DiagnosticLog.db(table, "count", 0L, rs.getInt(1))
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         /** Room v13 最终 schema 的 DDL（全新库直接建最终形态）。 */

@@ -3,6 +3,7 @@ package com.yunx.app.data.download
 import com.yunx.app.AppContext
 import com.yunx.app.data.gopeed.GopeedEngine
 import com.yunx.app.util.DesktopActions
+import com.yunx.app.util.DiagnosticLog
 import com.yunx.app.util.Log
 import com.yunx.app.util.LogRedactor
 import com.yunx.app.util.WindowsKeepAwake
@@ -428,7 +429,9 @@ class DownloadManager(
         val start = taskStartTimes.remove(id) ?: 0L
         val elapsedSec = ((System.currentTimeMillis() - start) / 1000.0).coerceAtLeast(1.0)
         val avg = if (total > 0 && elapsedSec > 0) (total / elapsedSec).toLong() else 0L
-        dao.complete(id, DownloadTaskEntity.STATUS_COMPLETED, savedPath, avg)
+        DiagnosticLog.dbOp("download_task", "complete", rowsOf = { -1 }) {
+            dao.complete(id, DownloadTaskEntity.STATUS_COMPLETED, savedPath, avg)
+        }
     }
 
     /** 每个任务一把互斥锁：暂停后立即恢复时避免新旧协程并发写分片 */
@@ -500,20 +503,32 @@ class DownloadManager(
         val effectiveShareUrl = shareUrl.ifBlank { currentShareUrl }
         Log.d(TAG, "enqueue: origin=${LogRedactor.url(url)} fileName=$safeName headers=${headers.keys} size=$size shareUrl=$effectiveShareUrl")
         val id = try {
-            dao.insert(
-                DownloadTaskEntity(
-                    url = url,
-                    fileName = safeName,
-                    requestHeadersJson = encodeHeaders(headers),
-                    platform = taskPlatform,
-                    shareUrl = effectiveShareUrl
+            DiagnosticLog.dbOp("download_task", "insert", rowsOf = { 1 }) {
+                dao.insert(
+                    DownloadTaskEntity(
+                        url = url,
+                        fileName = safeName,
+                        requestHeadersJson = encodeHeaders(headers),
+                        platform = taskPlatform,
+                        shareUrl = effectiveShareUrl
+                    )
                 )
-            )
+            }
         } catch (e: Exception) {
             Log.e(TAG, "enqueue: dao.insert FAILED: ${e.javaClass.simpleName}: ${e.message}", e)
             throw e
         }
         Log.d(TAG, "enqueue: dao.insert returned id=$id, calling start()")
+        // 诊断日志：任务入队（下载模块记体积/平台，操作模块记一笔「用户加了任务」）
+        DiagnosticLog.log(
+            DiagnosticLog.DOWNLOAD, "task_enqueue", taskId = id, status = "pending",
+            size = size.takeIf { it > 0 },
+            summary = "platform=$taskPlatform name=$safeName url=${LogRedactor.url(url)}"
+        )
+        DiagnosticLog.event(
+            DiagnosticLog.OPERATION, "download_enqueue",
+            "id=$id platform=$taskPlatform size=$size name=$safeName"
+        )
         // 保存请求头（Cookie/UA），暂停后恢复仍需携带
         if (headers.isNotEmpty()) taskHeaders[id] = headers
         if (size > 0) taskSizes[id] = size
@@ -664,6 +679,7 @@ class DownloadManager(
     /** 暂停下载（保留 part 文件与请求头） */
     fun pause(id: Long) {
         Log.d(TAG, "pause: id=$id")
+        DiagnosticLog.event(DiagnosticLog.OPERATION, "download_pause", "id=$id")
         // 引擎任务：转发「暂停」给 Gopeed，进度以引擎侧为准
         val engineId = engineTaskIds[id]
         if (engineId != null) {
@@ -730,7 +746,11 @@ class DownloadManager(
                     Log.d(TAG, "remove: id=$id 删除本地文件 ${if (deleted) "成功" else "失败/未找到"} ($it)")
                 }
             }
-            dao.delete(id)
+            DiagnosticLog.dbOp("download_task", "delete", rowsOf = { -1 }) { dao.delete(id) }
+            DiagnosticLog.event(
+                DiagnosticLog.OPERATION, "download_remove",
+                "id=$id deleteLocal=$deleteLocal"
+            )
             chunkDirOf(id).deleteRecursively()
             // 删除任务后清理云盘转存（与下载成功完成同语义）；失败不阻断
             cleanup?.let { runCatching { it() } }
@@ -845,6 +865,10 @@ class DownloadManager(
         runCatching { dao.updateEngineTaskId(id, engineId) }
         dao.updateStatus(id, DownloadTaskEntity.STATUS_DOWNLOADING)
         beginEngineTask(id)
+        DiagnosticLog.log(
+            DiagnosticLog.DOWNLOAD, "engine_task_created", taskId = id, status = "downloading",
+            summary = "engineId=$engineId platform=$platform name=$name"
+        )
         Log.i(TAG, "startViaEngine: id=$id engineId=$engineId dest=${engineDestPaths[id]}")
     }
 
@@ -936,6 +960,10 @@ class DownloadManager(
                 when (view.status) {
                     GopeedEngine.TaskStatus.DONE -> completeEngineTask(task, view)
                     GopeedEngine.TaskStatus.ERROR -> {
+                        DiagnosticLog.error(
+                            DiagnosticLog.DOWNLOAD, "engine_task_failed", code = "ENGINE_ERROR",
+                            summary = "task=${task.id} engineId=${task.engineTaskId} name=${task.fileName}"
+                        )
                         dao.updateStatus(task.id, DownloadTaskEntity.STATUS_FAILED)
                         dao.updateError(task.id, "Gopeed 引擎下载失败")
                         finishEngineTask(task.id)
@@ -950,6 +978,10 @@ class DownloadManager(
                         // 排队期间进度不动、状态也只写一次，避免每秒重复写库触发无谓的 UI 刷新。
                         if (task.status != DownloadTaskEntity.STATUS_PENDING) {
                             dao.updateStatus(task.id, DownloadTaskEntity.STATUS_PENDING)
+                            DiagnosticLog.log(
+                                DiagnosticLog.DOWNLOAD, "task_queued", taskId = task.id, status = "wait",
+                                summary = "engineId=${task.engineTaskId} 超出最大同时下载任务数，引擎排队中"
+                            )
                         }
                         _stats.update { it - task.id }
                     }
@@ -1000,6 +1032,11 @@ class DownloadManager(
         val realName = detail?.name?.takeIf { it.isNotBlank() } ?: task.fileName
         val savedPath = File(engineBaseDir(), realName).absolutePath
         completeWithAvg(task.id, savedPath, total)
+        DiagnosticLog.log(
+            DiagnosticLog.DOWNLOAD, "engine_task_complete", taskId = task.id, status = "completed",
+            size = total,
+            summary = "path=$savedPath 文件数=${detail?.fileCount ?: -1} 目录=${detail?.folder ?: false}"
+        )
         if (realName != task.fileName) {
             // 磁力：把界面上占位的显示名换成真正的种子名（失败只记日志，不影响已完成状态）
             runCatching { dao.updateFileName(task.id, realName) }
@@ -1076,6 +1113,10 @@ class DownloadManager(
                     attempts++
                     if (isTaskActive() && attempts <= maxRetries) {
                         Log.d(TAG, "runTaskWithRetry: id=$id 失败，自动重试 $attempts/$maxRetries：${e.message}")
+                        DiagnosticLog.warn(
+                            DiagnosticLog.DOWNLOAD, "task_retry",
+                            "task=$id | attempt=$attempts/$maxRetries | err=${e.message}"
+                        )
                         // 逐次递增延迟，避免失败风暴
                         delay(1200L * attempts)
                     } else {
@@ -1118,10 +1159,15 @@ class DownloadManager(
         if (total == null) {
             // 服务器不返回文件大小（Range/Content-Length 均缺失）：降级为流式下载（开放区间 Range）
             Log.w(TAG, "runTask: id=$id 无法获取总大小，降级流式下载 origin=${LogRedactor.url(task.url)}")
+            DiagnosticLog.warn(DiagnosticLog.DOWNLOAD, "task_stream_fallback", "task=$id | 服务器没给大小，降级流式下载")
             streamDownload(id, task, headers)
             return
         }
         Log.d(TAG, "getTotalSize: id=$id total=$total origin=${LogRedactor.url(task.url)}")
+        DiagnosticLog.log(
+            DiagnosticLog.DOWNLOAD, "task_size_probed", taskId = id, status = "downloading", size = total,
+            summary = "已有进度=${task.downloadedSize} url=${LogRedactor.url(task.url)}"
+        )
         dao.updateProgress(id, DownloadTaskEntity.STATUS_DOWNLOADING, task.downloadedSize, total)
         // 取到大小后再次检查取消（暂停可能发生在 getTotalSize 期间）
         if (!isTaskActive()) return
@@ -1159,6 +1205,11 @@ class DownloadManager(
         }
         val chunkSize = ceil(total.toDouble() / chunkCount).toLong()
         val elasticStart = mainPoolCount * chunkSize                          // 弹性区起始字节
+        DiagnosticLog.log(
+            DiagnosticLog.DOWNLOAD, "chunk_plan", taskId = id, status = "downloading", size = total,
+            summary = "线程数=$threadCount 分片数=$chunkCount 分片大小=$chunkSize 已完成=${task.downloadedSize}" +
+                if (canReusePlan) "（沿用旧计划）" else ""
+        )
         // 有效并发：仅迅雷（CDN 对单文件并发 Range 有阈值，约 8 个，超过会降级 200 整文件）封顶安全上限；
         // 其他平台保持用户设置的线程数（满并发）
         val isXunlei = headers["User-Agent"]?.contains("xunlei", ignoreCase = true) == true ||
@@ -1635,7 +1686,18 @@ class DownloadManager(
             mergeLastPercent = percent
             mergeLastAtMs = now
             _stats.update { it + (id to DownloadStats(mergePercent = percent)) }
+            // 诊断日志：合并回调很密，按 10% 采样（高频日志必须降频，见 DiagnosticLog 的限流说明）
+            if (percent % 10 == 0) {
+                DiagnosticLog.log(
+                    DiagnosticLog.DOWNLOAD, "merge_progress", taskId = id, status = "merging",
+                    size = done, summary = "percent=$percent%"
+                )
+            }
         }
+        DiagnosticLog.log(
+            DiagnosticLog.DOWNLOAD, "merge_start", taskId = id, status = "merging", size = mergeTotal,
+            summary = "分片数=${chunkFiles.size} 目标=$fileName"
+        )
         reportMergeProgress(0L)
         val savedPath = withContext(Dispatchers.IO) {
             val dest = DownloadSaver.openDestination(fileName, saveDirProvider())
@@ -1660,6 +1722,10 @@ class DownloadManager(
             }
         }
         completeWithAvg(id, savedPath, total)
+        DiagnosticLog.log(
+            DiagnosticLog.DOWNLOAD, "task_complete", taskId = id, status = "completed", size = total,
+            summary = "合并完成 path=$savedPath 分片数=${chunkFiles.size}"
+        )
         Log.d(TAG, "finishDownload: id=$id 下载完成 savedPath=$savedPath size=$total")
         taskCallbacks.remove(id)?.let { cb ->
             runCatching { cb() }

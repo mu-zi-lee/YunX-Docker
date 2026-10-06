@@ -81,6 +81,7 @@ import com.yunx.app.data.update.UpdateChecker
 import com.yunx.app.ui.SnackbarController
 import com.yunx.app.ui.components.FadeAlertDialog
 import com.yunx.app.util.DesktopActions
+import com.yunx.app.util.DiagnosticLog
 import com.yunx.app.util.Log
 import com.yunx.app.util.LogExporter
 import kotlinx.coroutines.Dispatchers
@@ -145,6 +146,8 @@ fun SettingsScreen(
     val settingsRepo = remember { SettingsRepository() }
     var downloadDirUri by remember { mutableStateOf(settingsRepo.downloadDirUri) }
     var showDevMenu by remember { mutableStateOf(false) }
+    // 诊断模式开关（开发调试菜单里）：本地状态驱动 UI，运行态在 DiagnosticLog 里（改完立刻生效）
+    var diagnosticOn by remember { mutableStateOf(settingsRepo.diagnosticMode) }
     // 网络与下载策略（本地状态驱动 UI，同时同步 Preferences）
     var maxConcurrent by remember { mutableStateOf(settingsRepo.maxConcurrentDownloads) }
     var speedLimitBps by remember { mutableStateOf(settingsRepo.downloadSpeedLimit) }
@@ -571,6 +574,25 @@ fun SettingsScreen(
                 ) {
                     Text("清空日志缓存")
                 }
+                // 诊断模式开着时额外提供 zip：把 diagnostic_logs 下的分模块日志一次带走
+                if (diagnosticOn) {
+                    TextButton(
+                        onClick = {
+                            showLogDialog = false
+                            scope.launch {
+                                val zip = withContext(Dispatchers.IO) { LogExporter.exportDiagnosticZip() }
+                                if (zip != null && DesktopActions.revealFile(zip.absolutePath)) {
+                                    SnackbarController.show("诊断日志已打包（${zip.name}）")
+                                } else {
+                                    SnackbarController.show("暂时没有可导出的诊断日志")
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("导出诊断日志（zip）")
+                    }
+                }
             }
         },
         confirmButton = {
@@ -601,6 +623,56 @@ fun SettingsScreen(
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("显示检查更新弹窗") }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 诊断模式：开启后 db / crypto / download / network / operation 等模块的详细日志
+                // 写进数据目录 diagnostic_logs（按模块分文件），关闭时一行都不写。
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("诊断模式", style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            text = if (diagnosticOn) {
+                                "详细日志写入 ${DiagnosticLog.dirOf().absolutePath}"
+                            } else {
+                                "关闭：不写任何诊断日志"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = diagnosticOn,
+                        onCheckedChange = { on ->
+                            diagnosticOn = on
+                            settingsRepo.diagnosticMode = on
+                            // 动态生效：setEnabled 会立刻起/停写线程，关闭时先 flush
+                            DiagnosticLog.setEnabled(on)
+                            SnackbarController.show(if (on) "诊断模式已开启" else "诊断模式已关闭")
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 导出入口（zip 名 yunx_diagnostic_logs_yyyyMMdd_HHmmss.zip，导出前会先 flush）
+                TextButton(
+                    onClick = {
+                        showDevMenu = false
+                        scope.launch {
+                            val zip = withContext(Dispatchers.IO) { LogExporter.exportDiagnosticZip() }
+                            if (zip != null && DesktopActions.revealFile(zip.absolutePath)) {
+                                SnackbarController.show("诊断日志已打包（${zip.name}）")
+                            } else {
+                                SnackbarController.show("暂时没有可导出的诊断日志")
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("导出诊断日志（zip）") }
             }
         },
         confirmButton = {

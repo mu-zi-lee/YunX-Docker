@@ -313,6 +313,34 @@
 | **合并阶段才发现分片长度不足** | 缺失区间只在 `!allOk`（worker 报失败）时才收集；分片可能"报 OK 但长度不足"（连接提前关闭 / 抢占竞态 / 旧 job 残留），到合并的大小校验才失败，白跑一轮整任务重试 | **一律**以磁盘真实长度收集缺失区间（主池 + 弹性区文件长度 + 弹性区 worker 失败项，按起点去重），补齐后才合并 |
 | 合并写盘慢 | 合并是纯本地顺序读+写，原用 64KB 缓冲 | 合并缓冲提到 **1MB**（与 `DownloadSaver.COPY_BUFFER_SIZE` 一致），系统调用次数降 16 倍 |
 
+### 9.11 本次对齐（上游 `c2fec49`/`ccc8622`）
+
+本轮覆盖上游 `c2fec49`(#150)「诊断模式（分模块日志）+ 导出日志改用 uid 过滤」与 `ccc8622`(#151) 版本号提交；桌面版本号按用户要求定为 **1.2.7**（上游是 1.2.9，两边版本线独立）。
+
+#### 已移植
+
+| 上游内容 | 桌面实现与取舍 |
+| --- | --- |
+| `util/DiagnosticLog`（413 行） | 新增桌面版 `util/DiagnosticLog.kt`：结构、限流（2000 队列 + 300 行/秒）、轮转（单文件 2MB / 每模块 5 个 / 总量 10MB）、六个模块常量与全部 API 均与上游一致。**桌面差异**：目录固定 `<dataDir>/diagnostic_logs`（无 `getExternalFilesDir` 之说，用户可直接在资源管理器打开）；pid 取 `ProcessHandle.current().pid()`；开关读 `SettingsRepository.diagnosticMode`（Preferences）；**所有入口不再需要 `Context` 参数** |
+| `DiagnosticNetworkInterceptor`（125 行） | 逐字节移植（OkHttp 拦截器，纯 JVM）：URL 过 `LogRedactor.url` 脱敏；**只有非 200/206 或抛异常才记 body**（各截 1.5KB），请求体用 `TeeRequestBody` 复制一份、对服务端零影响；关闭时首行 return |
+| `HttpClients` 挂拦截器 | api / download **两个客户端**都挂上（分片请求也记一行，靠 DiagnosticLog 的行数闸门限流） |
+| `SettingsRepository.diagnosticMode` | 新增（键 `diagnostic_mode`，默认关）；只存开关值，运行态由 `DiagnosticLog` 缓存，**改完立刻生效、不必重启** |
+| `CredentialCipher` 埋点 | 桌面是 `FileCredentialCipher`（非 Keystore），同样在 encrypt/decrypt 各记一条：**只记用途 + 长度，绝不打明文/密文** |
+| `AppDatabase` 库信息埋点 | 上游用 Room `Callback(onCreate/onOpen)`；桌面是 sqlite-jdbc，改为库打开成功时调 `logSchema(conn)`：查 `sqlite_master` 列业务表 + 每张表 `COUNT(*)`（只在诊断模式开启时跑，且只在开库那一次） |
+| `DownloadManager` 埋点 | 全部对齐：`task_enqueue` / `task_size_probed` / `chunk_plan` / `task_retry` / `task_stream_fallback` / `merge_start` / `merge_progress`（**按 10% 采样**，合并回调太密）/ `task_complete` / `engine_task_created` / `task_queued`（仅在状态真变化时记）/ `engine_task_failed` / `engine_task_complete`；`dao.insert/complete/delete` 走 `DiagnosticLog.dbOp` 自动记耗时与影响行数；`pause` / `remove` 记 operation 模块 |
+| `LogExporter.exportDiagnosticZip` | 桌面版同签名（无 Context）：转发到 `DiagnosticLog.exportZip()`，先 flush 再压，zip 落 `<dataDir>/cache/logs/` |
+| 设置页入口 | 与上游一致放在「关于云析」长按 → 开发调试菜单里：**诊断模式开关 + 导出诊断日志（zip）**；另外「导出日志」弹窗在诊断模式开启时也多一个 zip 入口 |
+| 冷启动装配 | 上游在 `YunXApp.onCreate`；桌面在 `Main.kt` 的 `AppContext.init()` 之后调 `DiagnosticLog.install()`（用 `runCatching` 包住，绝不影响启动） |
+
+#### 跳过 / 桌面差异
+
+| 上游内容 | 处理 |
+| --- | --- |
+| `LogExporter` 的 logcat 改动（`--pid=<当前进程>` → **不加任何过滤**） | **不适用**：桌面没有 logcat，导的是 `<dataDir>/files/yunx-desktop.log`（`Log` 门面统一写）。上游那段「别给 logcat 加过滤条件」的教训只对 Android 成立 |
+| `DiagnosticWebViewClient`、`WebViewJs` 埋点、8 个登录页的 `WEBVIEW` 模块埋点 | **未移植**：桌面用 JCEF 而非 Android WebView。保留了 `DiagnosticLog.WEBVIEW` 常量与 `DiagnosticLog.webview()` 入口（日志格式与上游兼容），但暂未接 JCEF 的加载/回调事件 |
+| 上游 `app/build.gradle.kts` 版本号（1.2.9） | 桌面版本线独立：根目录 `version.txt` 改为 **1.2.7**（jpackage / 便携包 / 安装包 / 应用内版本全部由它派生） |
+
+
 
 
 

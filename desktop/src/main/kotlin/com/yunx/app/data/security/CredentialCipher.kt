@@ -1,6 +1,7 @@
 package com.yunx.app.data.security
 
 import com.yunx.app.AppContext
+import com.yunx.app.util.DiagnosticLog
 import java.io.File
 import java.security.SecureRandom
 import java.util.Base64
@@ -39,6 +40,11 @@ internal class FileCredentialCipher : CredentialCipher {
     }
 
     override fun encrypt(plaintext: String, purpose: String): String {
+        // 诊断日志只记「用途 + 明文长度」，绝不打明文/密文本身
+        DiagnosticLog.log(
+            DiagnosticLog.CRYPTO, "encrypt", size = plaintext.toByteArray(Charsets.UTF_8).size.toLong(),
+            summary = "purpose=$purpose"
+        )
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         val iv = ByteArray(12).also { SecureRandom().nextBytes(it) }
         cipher.init(Cipher.ENCRYPT_MODE, key, GCMParameterSpec(128, iv))
@@ -50,6 +56,11 @@ internal class FileCredentialCipher : CredentialCipher {
     }
 
     override fun decrypt(stored: String, purpose: String): String {
+        // 诊断日志：解密是「密钥失效」类问题的第一现场（只记用途与长度，不记内容）
+        DiagnosticLog.log(
+            DiagnosticLog.CRYPTO, "decrypt", size = stored.length.toLong(),
+            summary = "purpose=$purpose"
+        )
         require(stored.startsWith(PREFIX)) { "stored value is not encrypted" }
         val parts = stored.removePrefix(PREFIX).split(":")
         require(parts.size == 2) { "malformed encrypted value" }

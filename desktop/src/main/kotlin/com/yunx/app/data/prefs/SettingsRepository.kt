@@ -102,6 +102,17 @@ class SettingsRepository {
         }
 
     /**
+     * 诊断模式（设置 → 关于云析 → 长按 → 开发调试）：默认关，开启后把 db / crypto / download /
+     * webview / network / operation 六个模块的详细日志写进数据目录（见 `DiagnosticLog`）。
+     * ★ 这里只存开关值，运行态由 `DiagnosticLog` 自己缓存（改完立刻生效，不必重启）。
+     */
+    var diagnosticMode: Boolean
+        get() = prefs.getBoolean("diagnostic_mode", false)
+        set(value) {
+            prefs.putBoolean("diagnostic_mode", value)
+        }
+
+    /**
      * 关闭主窗口时的行为：
      * - "ask"：每次询问（默认）
      * - "exit"：直接退出

@@ -64,4 +64,12 @@ object LogExporter {
         if (logFile.exists()) logFile.writeText("")
         true
     }.getOrDefault(false)
+
+    /**
+     * 打包全部诊断日志（`yunx_diagnostic_logs_yyyyMMdd_HHmmss.zip`）；诊断模式没开或还没写过返回 null。
+     *
+     * 真正的打包在 [DiagnosticLog.exportZip]（它先 flush 再压，保证最后几行也在包里），
+     * 这里只是把「日志导出」这套对外 API 收在同一个对象里，调用方不用同时认识两个工具。
+     */
+    fun exportDiagnosticZip(): File? = DiagnosticLog.exportZip()
 }

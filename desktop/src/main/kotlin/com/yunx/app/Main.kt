@@ -37,6 +37,8 @@ fun main(args: Array<String>) {
 
     // 桌面上下文初始化（数据目录等）
     AppContext.init()
+    // 诊断日志：读开关（默认关）并定好落盘目录；开着才起写线程，关着这里几乎零开销
+    runCatching { com.yunx.app.util.DiagnosticLog.install() }
     // HTTP 代理装配：按用户设置的三选一模式注入全局 OkHttp 客户端。
     // 必须在 application { } 之前、AppContext.init() 之后执行（此时 Preferences 已可用，
     // 且早于任何网络请求发出，代理即时对 API / 下载 / 更新检查全部生效）。

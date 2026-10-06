@@ -750,15 +750,14 @@ class DownloadManager(
     private val engineSyncIntervalMs = 1000L
 
     /**
-     * 上次推送给引擎的「最大同时运行任务数」（maxRunning）。
-     * -1 表示尚未推送过；与 [concurrencyProvider] 当前值不一致时重新推送。
-     * Gopeed 的 maxRunning 会持久化到引擎 bolt 库，所以只需在变化时 PUT 一次。
+     * 上次下发给引擎的运行配置签名（并发上限 + 连接数 + 代理，见 [GopeedEngine.settingsSignature]）。
+     * null 表示尚未下发过；签名变化（含用户在设置里改代理/线程数）时重新下发。
      */
     @Volatile
-    private var lastEngineMaxRunning: Int = -1
+    private var lastEngineConfigKey: String? = null
 
     /**
-     * 把设置里的「最大同时下载数」下发给引擎（引擎侧 `maxRunning`），并顺带下发 BT 不做种。
+     * 把「最大同时下载数 + 下载线程数 + 代理」下发给引擎，并顺带下发 BT 不做种。
      *
      * 引擎内的并发是原生调度：超出上限的任务被置为 `wait` 排队，有任务结束时引擎自己补位。
      * 但「调大上限」时引擎不会主动放行队列，所以在 [GopeedEngine.applyRuntimeConfig] 里按空位数补唤醒。
@@ -766,12 +765,14 @@ class DownloadManager(
      */
     private suspend fun syncEngineRuntimeConfig() {
         val desired = concurrencyProvider().coerceAtLeast(1)
-        if (desired == lastEngineMaxRunning) return
+        // 签名：并发上限 + 设置里影响引擎的其它项（线程数/代理）。任一项变了都要重新下发。
+        val key = "$desired|${GopeedEngine.settingsSignature()}"
+        if (key == lastEngineConfigKey) return
         val applied = runCatching {
             withContext(Dispatchers.IO) { GopeedEngine.applyRuntimeConfig(desired) }
-        }.onFailure { Log.w(TAG, "下发引擎运行配置失败（并发上限/不做种）：${it.message}") }.getOrNull()
+        }.onFailure { Log.w(TAG, "下发引擎运行配置失败（并发/连接数/代理）：${it.message}") }.getOrNull()
         // null = 引擎没在跑（下次启动会带上新值）；此时不写缓存，等引擎起来后会重试
-        if (applied != null) lastEngineMaxRunning = applied
+        if (applied != null) lastEngineConfigKey = key
     }
 
     init {
@@ -910,8 +911,8 @@ class DownloadManager(
                     delay(engineSyncIntervalMs)
                     continue
                 }
-                // 引擎刚拉起：重置缓存，确保 maxRunning 重新推送（bolt 里可能是旧值）
-                lastEngineMaxRunning = -1
+                // 引擎刚拉起：重置缓存，确保运行配置重新推送（bolt 里可能是旧值）
+                lastEngineConfigKey = null
             }
             // 引擎运行中：按需同步「最大同时下载数」（设置变化时 1s 内生效）
             syncEngineRuntimeConfig()
@@ -960,11 +961,16 @@ class DownloadManager(
                         } else {
                             -1L
                         }
+                        // 显示**实际**并发连接数（配置里传了 32 不代表引擎真开了 32 条连接）；
+                        // 取不到（老版本内核无 /stats）时回退到设置里的线程数
+                        val realConnections = runCatching {
+                            withContext(Dispatchers.IO) { GopeedEngine.taskConnections(engineId) }
+                        }.getOrNull()
                         _stats.update {
                             it + (task.id to DownloadStats(
                                 speed = view.speed,
                                 remainMillis = remain,
-                                chunkCount = threadProvider(task.platform)
+                                chunkCount = realConnections ?: threadProvider(task.platform)
                             ))
                         }
                         notifyProgress(task.id, task.fileName, view.downloaded, view.total)

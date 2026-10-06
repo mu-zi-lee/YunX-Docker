@@ -277,6 +277,20 @@
 - **下载地址可见可复制**：弹窗中展示实际使用的「加速链接」（设置里的 GitHub 镜像前缀，未配置用默认镜像）与 GitHub「直链」，各带一键复制。
 - **惰性启动引擎**：只在用户把下载引擎**切换到 Gopeed** 那一刻启动进程；下载/导入内核、进入引擎页都不再提前拉起（此前 `refreshVersion()` 会顺手 `start()`）。引擎未跑时读不到核心版本号属正常。
 
+#### 速度排查与优化（同日追加）
+
+先核实「多线程有没有传过去」：**传过去了**。gopeed HTTP 任务的并发由 `opts.extra.connections` 决定（`pkg/protocol/http/model.go` 的 `OptsExtra.Connections json:"connections"`），桌面按平台线程设置传入（默认 32）；gopeed 自带默认值是 16（`FetcherManager.DefaultConfig()`），任务级值优先。参数没问题，于是从别处找原因：
+
+| 项 | 说明 | 改动 |
+| --- | --- | --- |
+| **代理没同步给引擎** | 应用的 HTTP 客户端（含内置下载器）都跟随「设置 → 网络代理」，而引擎**默认直连** —— 用户配了代理时引擎被绕过，海外线路可能慢到不可用。这是最可疑的速度差异来源 | `applyRuntimeConfig` 一并下发 `proxy`：直连 `enable=false`；系统代理 `enable=true,system=true`（gopeed 自己读系统代理，原生支持 PAC）；手动 `enable=true,scheme=http,host=host:port`（gopeed 的 Host 直接进 `url.URL.Host`，必须带端口） |
+| 全局 HTTP 连接数偏低 | 引擎自带默认 16，仅作兜底（任务级 extra 优先） | `protocolConfig.http.connections` 对齐「下载线程数（通用）」设置 |
+| 界面「N 线程」是配置值，不是真实值 | 传了 32 ≠ 真开 32 条连接，无法自查 | 新增 `GopeedEngine.taskConnections()`（`GET /api/v1/tasks/{id}/stats` 的 `connections` 数组长度），同步循环用**真实连接数**更新 `DownloadStats.chunkCount`，取不到才回退配置值 |
+| 下发时机 | 原来只在 `maxRunning` 变化时才 PUT，改代理/线程数不会生效 | 缓存键改为「并发上限 + 连接数 + 代理」签名（`GopeedEngine.settingsSignature()`），任一项变化都会在 1s 内重新下发 |
+
+建任务时也会把实际下发的 `connections` 打进日志（`GopeedEngine` 的 `建任务：… connections=…`），便于与界面数字对照。
+
+
 
 
 

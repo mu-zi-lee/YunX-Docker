@@ -1,6 +1,8 @@
 package com.yunx.app.data.gopeed
 
 import com.yunx.app.AppContext
+import com.yunx.app.data.download.DownloadPlatform
+import com.yunx.app.data.prefs.SettingsRepository
 import com.yunx.app.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -106,6 +108,9 @@ object GopeedEngine {
 
     /** 引擎数据根目录 `<dataDir>/gopeed` */
     fun engineDir(): File = File(AppContext.dataDir, DIR_NAME)
+
+    /** 应用设置（读取「下载线程数 / 代理」用于下发引擎运行配置；Preferences 句柄复用一份） */
+    private val settings: SettingsRepository by lazy { SettingsRepository() }
 
     /** 内核可执行文件 */
     fun exeFile(): File = File(File(engineDir(), BIN_DIR_NAME), EXE_NAME)
@@ -364,6 +369,8 @@ object GopeedEngine {
         // 注意：新建任务的 `data` 是**任务 ID 字符串**，不是对象（与查询类接口不同）
         val id = requestEnvelope("POST", "/api/v1/tasks", body.toString()).optString("data").trim()
         if (id.isBlank()) throw IllegalStateException("引擎未返回任务 ID")
+        // 把实际下发的并发连接数打进日志，便于对照「界面显示的线程数」排查速度问题
+        Log.i(TAG, "建任务：engineId=$id name=$fileName connections=${if (connections > 0) connections else "引擎默认"}")
         return id
     }
 
@@ -390,6 +397,14 @@ object GopeedEngine {
             speed = progress?.optLong("speed") ?: 0L
         )
     }
+
+    /**
+     * 该任务**实际**的并发连接数（`GET /api/v1/tasks/{id}/stats` 的 `connections` 数组长度）。
+     * 配置里传了 32 不等于引擎真的开了 32 条连接：界面用真实值显示，取不到返回 null（回退到配置值）。
+     */
+    fun taskConnections(engineTaskId: String): Int? = runCatching {
+        get("/api/v1/tasks/$engineTaskId/stats").optJSONArray("connections")?.length()
+    }.getOrNull()
 
     fun pauseTask(engineTaskId: String) {
         requestEnvelope("PUT", "/api/v1/tasks/$engineTaskId/pause", null)
@@ -482,17 +497,77 @@ object GopeedEngine {
         val cfg = getConfig()
         cfg.put("maxRunning", value)
         val protocols = cfg.optJSONObject("protocolConfig") ?: JSONObject()
+        // BT 不做种
         val bt = protocols.optJSONObject("bt") ?: JSONObject()
         bt.put("seedKeep", false)
         bt.put("seedRatio", 0)
         bt.put("seedTime", 1)
         protocols.put("bt", bt)
+        // HTTP 全局连接数：对齐设置里的「下载线程数（通用）」。引擎自带的默认只有 16，
+        // 且任务级 opts.extra.connections 才是最终生效值——这里只是兜底，保证任何任务都不会退化成低连接。
+        val httpConnections = defaultHttpConnections()
+        val http = protocols.optJSONObject("http") ?: JSONObject()
+        http.put("connections", httpConnections)
+        protocols.put("http", http)
         cfg.put("protocolConfig", protocols)
+        // 代理：与内置下载器保持一致（引擎默认不启用代理 ⇒ 用户配了代理时会被绕过，海外线路可能极慢）
+        val proxy = proxyJson()
+        cfg.put("proxy", proxy)
         putConfig(cfg)
         if (wakeQueued) wakeQueuedTasks(value)
-        Log.i(TAG, "已下发引擎运行配置：maxRunning=$value BT不做种=$bt")
+        Log.i(
+            TAG,
+            "已下发引擎运行配置：maxRunning=$value http连接数=$httpConnections 代理=$proxy BT不做种=$bt"
+        )
         return value
     }
+
+    /** 全局 HTTP 连接数默认值：与「设置 → 下载线程数（通用）」一致（引擎自带默认仅 16） */
+    private fun defaultHttpConnections(): Int =
+        runCatching { settings.downloadThreadsFor(DownloadPlatform.GENERIC) }.getOrDefault(32)
+            .coerceIn(1, 512)
+
+    /**
+     * 把应用里的代理设置映射成 gopeed 的 `DownloaderProxyConfig`：
+     * - 直连：`enable=false`
+     * - 系统代理：`enable=true, system=true`（gopeed 自己读系统代理，且原生支持 PAC）
+     * - 手动：`enable=true, scheme=http, host=host:port`
+     *
+     * 为什么要同步：应用自身的 HTTP 客户端（含内置下载器）都跟随该设置，而引擎默认直连，
+     * 用户配了代理时引擎会被绕过 —— 海外线路可能慢到不可用。两套下载器必须口径一致。
+     */
+    private fun proxyJson(): JSONObject {
+        val json = JSONObject()
+        when (settings.proxyMode) {
+            SettingsRepository.PROXY_MODE_SYSTEM -> {
+                json.put("enable", true)
+                json.put("system", true)
+            }
+            SettingsRepository.PROXY_MODE_MANUAL -> {
+                val host = settings.proxyHost.trim()
+                val port = settings.proxyPort
+                if (host.isNotBlank() && port in 1..65535) {
+                    json.put("enable", true)
+                    json.put("system", false)
+                    json.put("scheme", "http")
+                    // gopeed 的 Host 直接进 url.URL.Host ⇒ 必须带端口
+                    json.put("host", "$host:$port")
+                } else {
+                    json.put("enable", false)
+                }
+            }
+            else -> json.put("enable", false)
+        }
+        return json
+    }
+
+    /**
+     * 影响「引擎运行配置」的设置签名（并发上限之外的部分：连接数、代理）。
+     * 调用方把它与并发上限拼成缓存键：任一项在设置里改了都要重新下发，而不是只在并发数变化时。
+     */
+    fun settingsSignature(): String = runCatching {
+        "${defaultHttpConnections()}|${settings.proxyMode}|${settings.proxyHost}|${settings.proxyPort}"
+    }.getOrDefault("")
 
     /**
      * 按空位数唤醒引擎里 status=wait 的排队任务。

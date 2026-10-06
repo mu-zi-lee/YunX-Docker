@@ -330,19 +330,33 @@ class SettingsRepository {
         /** HTTP/2 默认关闭（与现状一致：仅使用 HTTP/1.1） */
         const val DEFAULT_HTTP2_ENABLED = false
 
-        /** 下载读缓冲默认 64KB（与 ChunkDownloader.BUFFER_SIZE 一致，保证默认行为不变） */
+        /**
+         * 下载读缓冲默认 64KB（与 ChunkDownloader.BUFFER_SIZE 一致，保证默认行为不变）。
+         *
+         * 分两档上限：`RECOMMENDED_MAX_*` 是「合理范围」，超出它属于实验性取值 ——
+         * UI 会二次确认并提示后果由使用者承担；`MAX_*` 是硬上限，持久化与 UI 都不允许超过。
+         */
         const val DEFAULT_DOWNLOAD_BUFFER_SIZE = 64 * 1024
         const val MIN_DOWNLOAD_BUFFER_SIZE = 16 * 1024
-        const val MAX_DOWNLOAD_BUFFER_SIZE = 256 * 1024
+        /** 合理上限 1MB */
+        const val RECOMMENDED_MAX_DOWNLOAD_BUFFER_SIZE = 1024 * 1024
+        /** 硬上限 4MB（内存占用 ≈ 缓冲 × 在飞分片数，调大需自行权衡） */
+        const val MAX_DOWNLOAD_BUFFER_SIZE = 4 * 1024 * 1024
 
         /** 慢连接抢占默认开启（与现状一致），阈值 12KB/s、判定 15s */
         const val DEFAULT_SLOW_PREEMPT_ENABLED = true
         const val DEFAULT_SLOW_PREEMPT_MIN_BPS = 12L * 1024
         const val MIN_SLOW_PREEMPT_MIN_BPS = 4L * 1024
-        const val MAX_SLOW_PREEMPT_MIN_BPS = 256L * 1024
+        /** 合理上限 1MB/s */
+        const val RECOMMENDED_MAX_SLOW_PREEMPT_MIN_BPS = 1024L * 1024
+        /** 硬上限 10MB/s（阈值过高会让几乎所有连接都被判慢 → 频繁换连接） */
+        const val MAX_SLOW_PREEMPT_MIN_BPS = 10L * 1024 * 1024
         const val DEFAULT_SLOW_PREEMPT_MIN_AGE_MS = 15_000L
         const val MIN_SLOW_PREEMPT_MIN_AGE_MS = 5_000L
-        const val MAX_SLOW_PREEMPT_MIN_AGE_MS = 60_000L
+        /** 合理上限 120 秒 */
+        const val RECOMMENDED_MAX_SLOW_PREEMPT_MIN_AGE_MS = 120_000L
+        /** 硬上限 600 秒（判定过长 ≈ 新分片基本不会被抢占） */
+        const val MAX_SLOW_PREEMPT_MIN_AGE_MS = 600_000L
 
         /** 默认主题种子色：Material Blue（与内置默认方案一致） */
         const val DEFAULT_SEED_COLOR = 0xFF415F91L

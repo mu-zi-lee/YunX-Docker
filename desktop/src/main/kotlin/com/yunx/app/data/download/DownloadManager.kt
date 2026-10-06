@@ -1792,8 +1792,13 @@ class DownloadManager(
          * 全进程在飞分片上限（进程启动时按最大堆算一次）。
          * 由 `inflightLimiter` 用作信号量容量：无论用户怎么调线程数、同时开几个任务，
          * 同时在飞的下载请求数都不会超过它。
+         *
+         * ★ 缓冲大小取自运行时设置（「设置 → 实验性功能」允许把读缓冲调到远超默认的 64KB）：
+         *   缓冲越大、在飞路数上限越低，**总缓冲内存始终被压在堆预算的 1/[BUFFER_BUDGET_DIVISOR] 以内**，
+         *   不会因为用户把缓冲调到 1MB/4MB 就把内存撑爆。默认 64KB 时结果与改动前完全一致。
          */
-        val MAX_INFLIGHT_CHUNKS: Int = inflightChunksFor(Runtime.getRuntime().maxMemory())
+        val MAX_INFLIGHT_CHUNKS: Int =
+            inflightChunksFor(Runtime.getRuntime().maxMemory(), DownloadTuning.bufferSize)
 
         /**
          * 分片阻塞 IO 的专用线程池（进程级），worker 与 [ChunkDownloader] 内部的 `withContext` 都跑在它上面。

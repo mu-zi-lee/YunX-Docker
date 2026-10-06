@@ -51,14 +51,29 @@ import com.yunx.app.ui.SnackbarController
 import com.yunx.app.ui.components.FadeAlertDialog
 import com.yunx.app.ui.rememberGlobalSnackbarHostState
 
-/** 读缓冲可选档位（KB） */
-private val bufferKbOptions = listOf(16, 32, 64, 128, 256)
+/**
+ * 档位列表一律落在「合理范围」内（不会触发超限确认）；想要更高只能走弹窗里的自定义输入。
+ * 合理范围：读缓冲 16–1024 KB、慢连接阈值 4–1024 KB/s、慢连接时长 5–120 秒。
+ */
+private val bufferKbOptions = listOf(16, 32, 64, 128, 256, 512, 1024)
 
 /** 慢连接判定阈值可选档位（KB/s） */
-private val preemptMinBpsKbOptions = listOf(4, 8, 12, 16, 32, 64, 128, 256)
+private val preemptMinBpsKbOptions = listOf(4, 8, 12, 16, 32, 64, 128, 256, 512, 1024)
 
 /** 慢连接判定时长可选档位（秒） */
-private val preemptMinAgeSecOptions = listOf(5, 10, 15, 20, 30, 45, 60)
+private val preemptMinAgeSecOptions = listOf(5, 10, 15, 20, 30, 45, 60, 90, 120)
+
+/** 超出「合理范围」的自定义取值：交给页面统一弹免责确认后再写入 */
+private data class RiskyChange(
+    /** 设置项名称（用于弹窗文案） */
+    val setting: String,
+    val value: Long,
+    val unit: String,
+    /** 合理上限（弹窗里提示用户正常值到哪里） */
+    val recommendedMax: Long,
+    /** 用户确认「仍然启用」后真正落库的回调 */
+    val apply: (Long) -> Unit
+)
 
 /**
  * 「实验性功能」二级页：集中管理高风险 / 可调下载参数，支持一键重置为默认值。
@@ -94,6 +109,39 @@ fun ExperimentalFeaturesScreen(
     var minAgeCustomInput by remember { mutableStateOf("") }
 
     val snackbarHostState = rememberGlobalSnackbarHostState()
+    // 超出合理范围的自定义取值：非空时弹「超出合理范围」确认，用户确认后才写入
+    var riskyChange by remember { mutableStateOf<RiskyChange?>(null) }
+
+    // ---- 三个数值项的写入逻辑（档位选择与自定义输入共用同一条路径）----
+    /** 读缓冲：写设置 + 同步运行时 */
+    fun applyBufferKb(kb: Long) {
+        val bytes = (kb * 1024).toInt()
+        bufferSize = bytes
+        settingsRepo.downloadBufferSize = bytes
+        DownloadTuning.applyFrom(settingsRepo)
+        showBufferDialog = false
+        SnackbarController.show("读缓冲已设为 $kb KB（新任务生效）")
+    }
+
+    /** 慢连接判定阈值 */
+    fun applyMinBpsKb(kbps: Long) {
+        val bps = kbps * 1024L
+        preemptMinBps = bps
+        settingsRepo.slowPreemptMinBps = bps
+        DownloadTuning.applyFrom(settingsRepo)
+        showMinBpsDialog = false
+        SnackbarController.show("慢连接判定阈值已设为 $kbps KB/s")
+    }
+
+    /** 慢连接判定时长 */
+    fun applyMinAgeSec(sec: Long) {
+        val ms = sec * 1000L
+        preemptMinAgeMs = ms
+        settingsRepo.slowPreemptMinAgeMs = ms
+        DownloadTuning.applyFrom(settingsRepo)
+        showMinAgeDialog = false
+        SnackbarController.show("慢连接判定时长已设为 $sec 秒")
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -152,7 +200,7 @@ fun ExperimentalFeaturesScreen(
             SettingsItem(
                 icon = Icons.Outlined.Layers,
                 title = "下载读缓冲大小",
-                description = "当前 ${bufferSize / 1024} KB（影响每个在飞分片的内存占用；新任务生效）",
+                description = "当前 ${bufferSize / 1024} KB（合理范围 16–1024 KB；影响每个在飞分片的内存占用，新任务生效）",
                 onClick = {
                     bufferCustomInput = ""
                     showBufferDialog = true
@@ -183,7 +231,7 @@ fun ExperimentalFeaturesScreen(
             SettingsItem(
                 icon = Icons.Outlined.Tune,
                 title = "慢连接判定阈值",
-                description = "当前 ${preemptMinBps / 1024} KB/s（低于此速率的连接才判定为慢，4–256 KB/s）",
+                description = "当前 ${preemptMinBps / 1024} KB/s（低于此速率的连接才判定为慢；合理范围 4–1024 KB/s）",
                 onClick = {
                     minBpsCustomInput = ""
                     showMinBpsDialog = true
@@ -195,7 +243,7 @@ fun ExperimentalFeaturesScreen(
             SettingsItem(
                 icon = Icons.Outlined.Refresh,
                 title = "慢连接判定时长",
-                description = "当前 ${preemptMinAgeMs / 1000} 秒（分片至少跑这么久才允许被抢占，5–60 秒）",
+                description = "当前 ${preemptMinAgeMs / 1000} 秒（分片至少跑这么久才允许被抢占；合理范围 5–120 秒）",
                 onClick = {
                     minAgeCustomInput = ""
                     showMinAgeDialog = true
@@ -261,14 +309,7 @@ fun ExperimentalFeaturesScreen(
                     ) {
                         RadioButton(
                             selected = bufferSize == kb * 1024,
-                            onClick = {
-                                val bytes = kb * 1024
-                                bufferSize = bytes
-                                settingsRepo.downloadBufferSize = bytes
-                                DownloadTuning.applyFrom(settingsRepo)
-                                showBufferDialog = false
-                                SnackbarController.show("读缓冲已设为 $kb KB（新任务生效）")
-                            }
+                            onClick = { applyBufferKb(kb.toLong()) }
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("$kb KB", style = MaterialTheme.typography.bodyMedium)
@@ -281,15 +322,18 @@ fun ExperimentalFeaturesScreen(
                     label = "自定义（KB）",
                     fallbackHint = "${bufferSize / 1024}",
                     min = (SettingsRepository.MIN_DOWNLOAD_BUFFER_SIZE / 1024).toLong(),
-                    max = (SettingsRepository.MAX_DOWNLOAD_BUFFER_SIZE / 1024).toLong(),
+                    recommendedMax = (SettingsRepository.RECOMMENDED_MAX_DOWNLOAD_BUFFER_SIZE / 1024).toLong(),
+                    hardMax = (SettingsRepository.MAX_DOWNLOAD_BUFFER_SIZE / 1024).toLong(),
                     unit = "KB",
-                    onApply = { kb ->
-                        val bytes = (kb * 1024).toInt()
-                        bufferSize = bytes
-                        settingsRepo.downloadBufferSize = bytes
-                        DownloadTuning.applyFrom(settingsRepo)
-                        showBufferDialog = false
-                        SnackbarController.show("读缓冲已设为 $kb KB（新任务生效）")
+                    onValidated = { kb ->
+                        val recommended = (SettingsRepository.RECOMMENDED_MAX_DOWNLOAD_BUFFER_SIZE / 1024).toLong()
+                        if (kb > recommended) {
+                            // 超合理范围：先关掉设置弹窗，再弹「超出合理范围」免责确认
+                            showBufferDialog = false
+                            riskyChange = RiskyChange("下载读缓冲大小", kb, "KB", recommended) { applyBufferKb(it) }
+                        } else {
+                            applyBufferKb(kb)
+                        }
                     }
                 )
             }
@@ -319,14 +363,7 @@ fun ExperimentalFeaturesScreen(
                     ) {
                         RadioButton(
                             selected = preemptMinBps == kb * 1024L,
-                            onClick = {
-                                val bps = kb * 1024L
-                                preemptMinBps = bps
-                                settingsRepo.slowPreemptMinBps = bps
-                                DownloadTuning.applyFrom(settingsRepo)
-                                showMinBpsDialog = false
-                                SnackbarController.show("慢连接判定阈值已设为 $kb KB/s")
-                            }
+                            onClick = { applyMinBpsKb(kb.toLong()) }
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("$kb KB/s", style = MaterialTheme.typography.bodyMedium)
@@ -338,16 +375,18 @@ fun ExperimentalFeaturesScreen(
                     onValueChange = { minBpsCustomInput = it },
                     label = "自定义（KB/s）",
                     fallbackHint = "${preemptMinBps / 1024}",
-                    min = SettingsRepository.MIN_SLOW_PREEMPT_MIN_BPS / 1024,
-                    max = SettingsRepository.MAX_SLOW_PREEMPT_MIN_BPS / 1024,
+                    min = (SettingsRepository.MIN_SLOW_PREEMPT_MIN_BPS / 1024).toLong(),
+                    recommendedMax = (SettingsRepository.RECOMMENDED_MAX_SLOW_PREEMPT_MIN_BPS / 1024).toLong(),
+                    hardMax = (SettingsRepository.MAX_SLOW_PREEMPT_MIN_BPS / 1024).toLong(),
                     unit = "KB/s",
-                    onApply = { kbps ->
-                        val bps = kbps * 1024L
-                        preemptMinBps = bps
-                        settingsRepo.slowPreemptMinBps = bps
-                        DownloadTuning.applyFrom(settingsRepo)
-                        showMinBpsDialog = false
-                        SnackbarController.show("慢连接判定阈值已设为 $kbps KB/s")
+                    onValidated = { kbps ->
+                        val recommended = (SettingsRepository.RECOMMENDED_MAX_SLOW_PREEMPT_MIN_BPS / 1024).toLong()
+                        if (kbps > recommended) {
+                            showMinBpsDialog = false
+                            riskyChange = RiskyChange("慢连接判定阈值", kbps, "KB/s", recommended) { applyMinBpsKb(it) }
+                        } else {
+                            applyMinBpsKb(kbps)
+                        }
                     }
                 )
             }
@@ -377,14 +416,7 @@ fun ExperimentalFeaturesScreen(
                     ) {
                         RadioButton(
                             selected = preemptMinAgeMs == sec * 1000L,
-                            onClick = {
-                                val ms = sec * 1000L
-                                preemptMinAgeMs = ms
-                                settingsRepo.slowPreemptMinAgeMs = ms
-                                DownloadTuning.applyFrom(settingsRepo)
-                                showMinAgeDialog = false
-                                SnackbarController.show("慢连接判定时长已设为 $sec 秒")
-                            }
+                            onClick = { applyMinAgeSec(sec.toLong()) }
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text("$sec 秒", style = MaterialTheme.typography.bodyMedium)
@@ -396,16 +428,18 @@ fun ExperimentalFeaturesScreen(
                     onValueChange = { minAgeCustomInput = it },
                     label = "自定义（秒）",
                     fallbackHint = "${preemptMinAgeMs / 1000}",
-                    min = SettingsRepository.MIN_SLOW_PREEMPT_MIN_AGE_MS / 1000,
-                    max = SettingsRepository.MAX_SLOW_PREEMPT_MIN_AGE_MS / 1000,
+                    min = (SettingsRepository.MIN_SLOW_PREEMPT_MIN_AGE_MS / 1000).toLong(),
+                    recommendedMax = (SettingsRepository.RECOMMENDED_MAX_SLOW_PREEMPT_MIN_AGE_MS / 1000).toLong(),
+                    hardMax = (SettingsRepository.MAX_SLOW_PREEMPT_MIN_AGE_MS / 1000).toLong(),
                     unit = "秒",
-                    onApply = { sec ->
-                        val ms = sec * 1000L
-                        preemptMinAgeMs = ms
-                        settingsRepo.slowPreemptMinAgeMs = ms
-                        DownloadTuning.applyFrom(settingsRepo)
-                        showMinAgeDialog = false
-                        SnackbarController.show("慢连接判定时长已设为 $sec 秒")
+                    onValidated = { sec ->
+                        val recommended = (SettingsRepository.RECOMMENDED_MAX_SLOW_PREEMPT_MIN_AGE_MS / 1000).toLong()
+                        if (sec > recommended) {
+                            showMinAgeDialog = false
+                            riskyChange = RiskyChange("慢连接判定时长", sec, "秒", recommended) { applyMinAgeSec(it) }
+                        } else {
+                            applyMinAgeSec(sec)
+                        }
                     }
                 )
             }
@@ -461,6 +495,43 @@ fun ExperimentalFeaturesScreen(
             TextButton(onClick = { showResetConfirm = false }) { Text("取消") }
         }
     )
+
+    // 超出合理范围：二次确认 + 免责提示（点「仍然启用」才按输入值写入）
+    riskyChange?.let { rc ->
+        FadeAlertDialog(
+            visible = true,
+            onDismissRequest = { riskyChange = null },
+            title = { Text("超出合理范围") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "「${rc.setting}」的合理上限是 ${rc.recommendedMax} ${rc.unit}，" +
+                            "你输入的是 ${rc.value} ${rc.unit}。",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Text(
+                        text = "仍然可以启用，但超出合理范围可能带来内存占用升高、速度反而下降、" +
+                            "连接异常或任务失败等问题。因自行调整实验性功能造成的后果由使用者自行承担，" +
+                            "开发者不对此负责。",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val v = rc.value
+                        riskyChange = null
+                        rc.apply(v)
+                    }
+                ) { Text("仍然启用") }
+            },
+            dismissButton = {
+                TextButton(onClick = { riskyChange = null }) { Text("取消") }
+            }
+        )
+    }
 }
 
 /**
@@ -477,13 +548,17 @@ private fun CustomNumberRow(
     /** 输入框为空时的占位提示（一般填当前值） */
     fallbackHint: String,
     min: Long,
-    max: Long,
+    /** 合理上限：超过它由调用方弹二次确认（本行不拦截） */
+    recommendedMax: Long,
+    /** 硬上限：超过它直接拒绝，不写入 */
+    hardMax: Long,
     unit: String,
-    onApply: (Long) -> Unit
+    /** 已通过「数字 + 硬范围」校验的取值 */
+    onValidated: (Long) -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = "或直接输入数值（$min–$max $unit）",
+            text = "或直接输入数值（$min–$recommendedMax $unit；超过 $recommendedMax 会二次确认）",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -505,8 +580,9 @@ private fun CustomNumberRow(
                     val v = value.trim().toLongOrNull()
                     when {
                         v == null -> SnackbarController.show("请输入数字")
-                        v < min || v > max -> SnackbarController.show("请输入 $min–$max 之间的数值（$unit）")
-                        else -> onApply(v)
+                        v < min || v > hardMax ->
+                            SnackbarController.show("可设置范围 $min–$hardMax $unit（超过 $recommendedMax 会二次确认）")
+                        else -> onValidated(v)
                     }
                 }
             ) { Text("应用") }

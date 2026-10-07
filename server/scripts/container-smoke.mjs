@@ -41,7 +41,7 @@ async function ready() {
 }
 async function api(path, body) {
   const response = await fetch(url + "/api/" + path, {
-    headers: { Authorization: auth, ...(body ? { "X-YunX-Request": "1", "Content-Type": "application/json" } : {}) },
+    headers: { Cookie: auth, ...(body ? { "X-YunX-Request": "1", "Content-Type": "application/json" } : {}) },
     ...(body ? { method: "POST", body: JSON.stringify(body) } : {})
   });
   assert.equal(response.status, 200);
@@ -50,15 +50,24 @@ async function api(path, body) {
 try {
   compose("up", "-d", "--pull", "never");
   await ready();
-  assert.equal((await fetch(url)).status, 401);
+  assert.equal((await fetch(url)).status, 200);
+  assert.equal((await fetch(url + "/api/tasks")).status, 401);
   const id = compose("ps", "-q", "yunx");
   assert.equal(docker("exec", id, "id", "-u"), "1000");
   assert.equal(docker("exec", id, "stat", "-c", "%a", "/data/initial-password.txt"), "600");
   const password = docker("exec", id, "cat", "/data/initial-password.txt");
   assert.ok(/^[A-Za-z0-9_-]{32}$/.test(password));
   assert.ok(!docker("logs", id).includes(password), "Password leaked to container logs");
-  auth = "Basic " + Buffer.from("admin:" + password).toString("base64");
-  assert.equal((await fetch(url, { headers: { Authorization: auth } })).status, 200);
+  async function login() {
+    const response = await fetch(url + "/api/auth/login", {
+      method: "POST", headers: { "Content-Type": "application/json", "X-YunX-Request": "1" },
+      body: JSON.stringify({username: "admin", password})
+    });
+    assert.equal(response.status, 200);
+    auth = response.headers.get("set-cookie").split(";")[0];
+  }
+  await login();
+  assert.equal((await fetch(url + "/api/tasks", { headers: { Cookie: auth } })).status, 200);
   await api("accounts", { platform: "QUARK", credentials: { cookie: "container-test-cookie" } });
   const gateway = docker("inspect", "-f", "{{range .NetworkSettings.Networks}}{{.Gateway}}{{end}}", id);
   const task = await api("direct", { url: `http://${gateway}:${source.address().port}/sample`, filename: "container.bin" });
@@ -76,6 +85,8 @@ try {
   compose("up", "-d", "--pull", "never");
   await ready();
   assert.ok(docker("exec", compose("ps", "-q", "yunx"), "cat", "/data/initial-password.txt") === password);
+  assert.equal((await fetch(url + "/api/tasks", {headers: { Cookie: auth }})).status, 401);
+  await login();
   assert.equal((await api("accounts")).find(a => a.platform === "QUARK").configured, true);
   assert.equal((await api("tasks")).find(t => t.id === task.id).status, 3);
   console.log("NAS container: generated password, permissions, authentication, download and recreation persistence passed.");

@@ -22,18 +22,28 @@ Compose 从 Docker Hub 拉取 `muzileee/yunx-server:latest`，无需在服务器
 
 需要自定义端口、用户名或密码时，复制 `.env.example` 为 `.env` 后编辑。
 `YUNX_PASSWORD` 留空即可自动生成；填写时使用 12–256 字符，显式配置优先于保存的初始密码，
-移除显式配置后恢复使用初始密码。
+移除显式配置后恢复之前保存的网页登录密码；如果从未保存过，则首次生成随机密码。
+
+从 v0.2.0 开始使用 YunX 自带的登录页面，不再弹出浏览器 HTTP Basic 登录框。
+登录后，在「设置 → 登录与安全」可修改密码。新密码以 PBKDF2 哈希保存到
+`/data/login-auth.json`，重启继续有效；修改后所有旧会话失效，初始明文密码文件会删除。
+如果设置了 `YUNX_PASSWORD`，密码由该部署变量管理，网页不能修改。
+忘记网页修改后的密码时，停止容器、备份数据并删除 `data/login-auth.json`，
+保持 `YUNX_PASSWORD` 为空后重新启动，读取重新生成的初始密码。不要删除其他数据。
 
 容器以 UID/GID `1000:1000` 运行。使用其他下载目录时，请先创建该目录并授权该用户写入；
 目录归属的调整应只针对专门的下载目录。NAS 可通过 ACL 授予 UID 1000 写入权限。
 
 浏览器打开 `http://服务器IP:8080`，用上述用户名和密码登录。
-页面的「账号」可保存对应网盘凭证；「解析」可浏览分享目录并加入下载；
+页面的「账号」可添加凭证、刷新昵称与容量，已配置账号与待添加平台分开显示；
+「我的网盘」可浏览个人目录；「分享解析」可浏览分享目录、保存收藏和打开历史；
+两个文件浏览器均支持当前目录搜索、排序、列表/网格切换和逐文件多选下载。
 「下载」可查看进度、暂停、继续或移除任务记录。移除任务记录不会删除已完成文件。
 已完成文件直接保存在宿主机下载目录，不经过浏览器。
 
-公网使用时，将服务放在 HTTPS 反向代理后。HTTP Basic 登录需要 HTTPS 来保护密码和网盘凭证；
-反向代理须转发 `Authorization`，长时间的解析/取链请求建议设置至少 180 秒超时。
+公网使用时，将服务放在 HTTPS 反向代理后保护密码和网盘凭证；
+反向代理须转发 Cookie/Set-Cookie，正确设置 `X-Forwarded-Proto: https`。
+长时间的解析/取链请求建议设置至少 180 秒超时。
 使用本机反向代理时，可将 `YUNX_BIND_ADDRESS` 设置为 `127.0.0.1`。
 
 ### NAS 部署
@@ -54,7 +64,7 @@ docker compose -f docker-compose.nas.yml exec -T yunx cat /data/initial-password
 
 账号、密码和任务保存到项目的 `data` 目录，下载文件保存在 `downloads`。
 升级前备份这两个目录。默认使用 `latest`；要固定版本，设置
-`YUNX_IMAGE=muzileee/yunx-server:0.1.0`。镜像支持 x86_64（amd64）与 ARM64，32 位 ARM 不在支持范围。
+`YUNX_IMAGE=muzileee/yunx-server:0.2.0`。镜像支持 x86_64（amd64）与 ARM64，32 位 ARM 不在支持范围。
 
 ## 配置
 
@@ -74,6 +84,8 @@ docker compose -f docker-compose.nas.yml exec -T yunx cat /data/initial-password
 容器端口固定为 8080，Compose 的 `YUNX_PORT` 只修改宿主机映射。
 默认内存上限为 1 GB，JVM 使用至多约 60% 作为堆。首次编译建议至少有 3 GB 可用内存。
 GitHub CI 在 amd64、arm64 原生 runner 上分别构建、运行容器并验证 NAS 持久化。
+「设置」中保存的线程数、并发数和限速会持久化并优先于环境变量默认值。
+线程设置对新启动任务生效，调整并发后继续或新增任务时调度器会按新上限运行。
 
 ## 网盘凭证与功能范围
 
@@ -92,7 +104,12 @@ GitHub CI 在 amd64、arm64 原生 runner 上分别构建、运行容器并验�
 
 支持逐文件下载、分享目录浏览、HTTP/HTTPS 直链下载，以及 GitHub 仓库 Releases、
 默认分支 ZIP 和账号仓库列表。GitHub 仓库链接中的 tree/blob 子路径当前按仓库入口处理。
-服务器版没有桌面托盘、系统通知、剪贴板检测、个人网盘管理、收藏/历史界面或 Gopeed/磁力下载入口。
+个人网盘浏览与下载支持夸克、UC、百度、139、115、123、光鸭与迅雷；
+迅雷个人目录需 App 通道凭证，网页通道仍可用于既有分享解析流程。
+光鸭容量查询还需 Device ID 与 Device Sign；页面中可填写。
+未配置或接口不支持容量时显示未知，不会编造容量或把一次网络失败判定成 Cookie 过期。
+服务器版没有桌面托盘、系统通知、剪贴板检测、云端文件移动/删除/重命名、
+整文件夹递归下载或 Gopeed/磁力下载入口。功能对照见 `docs/WEB-FEATURES.md`。
 大文件签名直链到期后，继续旧任务可能失败，请重新解析分享获取直链。
 
 ## 数据与更新
@@ -103,6 +120,8 @@ GitHub CI 在 amd64、arm64 原生 runner 上分别构建、运行容器并验�
 - `server-credentials.enc` 加密账号凭证；
 - `credential.key` 加密密钥，必须与数据一起备份；
 - `initial-password.txt` 自动生成的登录密码，需作为敏感文件保管；
+- `login-auth.json` 登录密码哈希，修改密码后初始密码文件会删除；
+- 收藏和解析历史（含分享提取码），以及持久化下载设置；
 - 下载分片、日志及 Java Preferences。
 
 下载目录单独挂载到 `/downloads`。备份时先执行 `docker compose stop`，

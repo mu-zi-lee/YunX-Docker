@@ -9,7 +9,6 @@ import com.yunx.app.data.network.SharePlatform
 import com.yunx.app.data.network.model.DownloadLink
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
-import okhttp3.Credentials as HttpCredentials
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -32,12 +31,13 @@ import org.junit.Test
 
 class WebServerTest {
     private val client = OkHttpClient()
-    private val auth = HttpCredentials.basic("admin", "test-password-only")
+    private var defaultCookie: String? = null
     private lateinit var server: WebServer
     private lateinit var manager: DownloadManager
     private lateinit var destination: File
     private lateinit var store: Credentials
     private lateinit var accountFile: File
+    private lateinit var login: LoginAuth
 
     @Before
     fun setup() {
@@ -49,7 +49,8 @@ class WebServerTest {
         manager = DownloadManager(db.downloadTaskDao(), ChunkDownloader { HttpClients.downloadClient() },
             threadProvider = { 2 }, saveDirProvider = { destination.absolutePath },
             keepAwakeProvider = { false }, retryCountProvider = { 0 })
-        server = WebServer(ServerService(db, manager, store), "admin", "test-password-only", InetSocketAddress("127.0.0.1", 0))
+        login = LoginAuth(File(destination, "login-auth.json"), "test-password-only")
+        server = WebServer(ServerService(db, manager, store), "admin", "test-password-only", InetSocketAddress("127.0.0.1", 0), login)
         server.start()
     }
 
@@ -61,24 +62,90 @@ class WebServerTest {
     }
 
     private fun request(path: String, body: String? = null, authorized: Boolean = true, csrf: Boolean = true,
-                        contentType: String = "application/json", crossSite: Boolean = false): Pair<Int, String> {
+                        contentType: String = "application/json", crossSite: Boolean = false, cookie: String? = null): Pair<Int, String> {
         val req = Request.Builder().url("http://127.0.0.1:${server.port}$path")
-        if (authorized) req.header("Authorization", auth)
+        if (authorized) req.header("Cookie", defaultCookie ?: loginCookie().also { defaultCookie = it })
         if (csrf) req.header("X-YunX-Request", "1")
         if (crossSite) req.header("Sec-Fetch-Site", "cross-site")
+        if (cookie != null) req.header("Cookie", cookie)
         if (body != null) req.post(body.toRequestBody(contentType.toMediaType()))
         return client.newCall(req.build()).execute().use { it.code to it.body!!.string() }
     }
 
     @Test
-    fun `only health is public and browser assets are bundled`() {
+    fun `login shell is public but data requires authentication`() {
         assertEquals(200, request("/health", authorized = false).first)
-        assertEquals(401, request("/", authorized = false).first)
+        assertEquals(200, request("/", authorized = false).first)
         assertEquals(401, request("/api/tasks", authorized = false).first)
         assertContains(request("/").second, "YunX")
         assertEquals(200, request("/lucide.min.js").first)
         assertEquals(200, request("/icon.png").first)
+        assertEquals(200, request("/fonts/space-mono.ttf", authorized = false).first)
         assertEquals(404, request("/../../Dockerfile").first)
+    }
+
+    private fun loginCookie(): String {
+        val body = JSONObject().put("username", "admin").put("password", "test-password-only")
+        val req = Request.Builder().url("http://127.0.0.1:${server.port}/api/auth/login")
+            .header("X-YunX-Request", "1").post(body.toString().toRequestBody("application/json".toMediaType())).build()
+        return client.newCall(req).execute().use {
+            assertEquals(200, it.code)
+            val header = it.header("Set-Cookie")!!
+            assertContains(header, "HttpOnly")
+            assertContains(header, "SameSite=Strict")
+            header.substringBefore(';')
+        }
+    }
+
+    @Test
+    fun `cookie login change password and logout invalidate sessions and persist hashes`() {
+        val cookie = loginCookie().also { defaultCookie = it }
+        assertEquals(200, request("/api/tasks", authorized = false, cookie = cookie).first)
+        assertEquals(400, request("/api/auth/password", """{"current":"wrong-password","password":"new-test-password"}""",
+            authorized = false, cookie = cookie).first)
+        assertEquals(200, request("/api/auth/password", """{"current":"test-password-only","password":"new-test-password"}""",
+            authorized = false, cookie = cookie).first)
+        assertEquals(401, request("/api/tasks", authorized = false, cookie = cookie).first)
+        assertEquals(401, request("/api/tasks").first)
+        val persisted = File(destination, "login-auth.json")
+        assertFalse(persisted.readText().contains("new-test-password"))
+        val restored = LoginAuth(persisted, "test-password-only")
+        assertTrue(restored.verify("new-test-password"))
+        assertFalse(restored.verify("test-password-only"))
+    }
+
+    @Test
+    fun `login writes require csrf and logout actually revokes the session`() {
+        val body = """{"username":"admin","password":"test-password-only"}"""
+        assertEquals(403, request("/api/auth/login", body, authorized = false, csrf = false).first)
+        assertEquals(403, request("/api/auth/login", body, authorized = false, crossSite = true).first)
+        assertEquals(401, request("/api/auth/login", """{"username":"admin","password":"wrong-password"}""", authorized = false).first)
+        val cookie = loginCookie()
+        assertEquals(200, request("/api/auth/logout", "{}", authorized = false, cookie = cookie).first)
+        assertEquals(401, request("/api/tasks", authorized = false, cookie = cookie).first)
+    }
+
+    @Test
+    fun `settings persist and cloud sessions reject unconfigured accounts and forged ids`() {
+        assertEquals(200, request("/api/settings", """{"threads":8,"concurrency":2,"speedLimit":1048576}""").first)
+        assertEquals(8, JSONObject(request("/api/settings").second).getInt("threads"))
+        assertEquals(8, Credentials(accountFile).get("_SETTINGS").getInt("threads"))
+        assertEquals(400, request("/api/settings", """{"threads":129,"concurrency":2,"speedLimit":0}""").first)
+        assertEquals(400, request("/api/account-info", """{"platform":"QUARK"}""").first)
+        assertEquals(400, request("/api/cloud/files", """{"platform":"QUARK"}""").first)
+        assertEquals(400, request("/api/cloud/download", """{"sessionId":"forged","fid":"1"}""").first)
+    }
+    @Test
+    fun `saved links use persistent desktop storage and can be removed`() {
+        val link = "https://pan.quark.cn/s/123456789abc"
+        val body = JSONObject().put("kind", "bookmarks").put("link", link).put("title", "测试收藏").put("password", "1234")
+        assertEquals(200, request("/api/library", body.toString()).first)
+        val saved = JSONObject(request("/api/library").second).getJSONArray("bookmarks")
+        val item = (0 until saved.length()).map { saved.getJSONObject(it) }.first { it.getString("link") == link }
+        assertEquals("1234", item.getString("password"))
+        assertEquals(200, request("/api/library", JSONObject().put("kind", "bookmarks").put("action", "remove")
+            .put("id", item.getLong("id")).toString()).first)
+        assertEquals(400, request("/api/library", """{"kind":"bookmarks","link":"file:///etc/passwd"}""").first)
     }
 
     @Test

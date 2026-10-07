@@ -33,4 +33,9 @@ class Credentials(private val file: File) {
         val entry = get(platform)
         return entry.optString("cookie").ifBlank { entry.optString("accessToken") }
     }
+    @Synchronized
+    fun updateCookie(platform: String, expected: String, replacement: String) {
+        val current = get(platform)
+        if (current.optString("cookie") == expected) save(platform, current.put("cookie", replacement))
+    }
 }

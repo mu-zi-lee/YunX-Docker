@@ -32,11 +32,12 @@ await new Promise(done => portProbe.close(done));
 const url = `http://127.0.0.1:${port}`;
 let password;
 let auth;
+let changedPassword = false;
 let child;
 let log = "";
 async function api(path, body) {
   const response = await fetch(url + "/api/" + path, {
-    headers: { Authorization: auth, ...(body ? { "Content-Type": "application/json", "X-YunX-Request": "1" } : {}) },
+    headers: { Cookie: auth, ...(body ? { "Content-Type": "application/json", "X-YunX-Request": "1" } : {}) },
     ...(body ? { method: "POST", body: JSON.stringify(body) } : {})
   });
   const data = await response.json();
@@ -56,11 +57,16 @@ async function start() {
     if (child.exitCode !== null) throw new Error(log);
     try {
       if ((await fetch(url + "/health")).ok) {
-        const saved = (await readFile(directory + "/data/initial-password.txt", "utf8")).trim();
-        assert.match(saved, /^[A-Za-z0-9_-]{32}$/);
+        const saved = changedPassword ? password : (await readFile(directory + "/data/initial-password.txt", "utf8")).trim();
+        if (!changedPassword) assert.match(saved, /^[A-Za-z0-9_-]{32}$/);
         if (password) assert.ok(saved === password, "Password must persist across restarts");
         password = saved;
-        auth = "Basic " + Buffer.from("admin:" + password).toString("base64");
+        const response = await fetch(url + "/api/auth/login", {
+          method: "POST", headers: { "Content-Type": "application/json", "X-YunX-Request": "1" },
+          body: JSON.stringify({ username: "admin", password })
+        });
+        assert.equal(response.status, 200);
+        auth = response.headers.get("set-cookie").split(";")[0];
         assert.ok(!log.includes(password), "Logs must not expose the login password");
         return;
       }
@@ -111,7 +117,14 @@ try {
   await stop("SIGKILL");
   await start();
   assert.equal((await api("tasks")).find(t => t.id === next.id).status, 2);
-  console.log("Graceful/forced restart and resumed file verification passed.");
+  await api("auth/password", {current: password, password: "restart-updated-test-password"});
+  changedPassword = true;
+  password = "restart-updated-test-password";
+  await stop();
+  await start();
+  assert.equal((await api("accounts")).find(account => account.platform === "QUARK").configured, true);
+  assert.ok(!(await readFile(directory + "/data/login-auth.json", "utf8")).includes(password));
+  console.log("Graceful/forced restart, resumed file and changed-password persistence verification passed.");
 } catch (error) {
   console.error(log);
   throw error;

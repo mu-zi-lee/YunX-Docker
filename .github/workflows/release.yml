@@ -1,0 +1,82 @@
+name: Publish server image
+on:
+  push:
+    tags: ['server-v*.*.*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        shell: bash
+        run: |
+          version=$(tr -d '\r\n' < server/version.txt)
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            [[ "$GITHUB_REF_NAME" == "server-v$version" ]]
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+  verify:
+    uses: ./.github/workflows/ci.yml
+  publish:
+    needs: [version, verify]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check publishing credentials
+        env:
+          HUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          HUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          test -n "$HUB_USERNAME" && test -n "$HUB_TOKEN" || {
+            echo "::error::Set DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in this repository's Actions secrets."
+            exit 1
+          }
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: muzileee/yunx-server:${{ needs.version.outputs.version }}-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.licenses=AGPL-3.0
+            org.opencontainers.image.version=${{ needs.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=server-${{ matrix.arch }}
+  manifest:
+    needs: [version, publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Publish multi-platform tags
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          docker buildx imagetools create \
+            --tag muzileee/yunx-server:"$VERSION" \
+            --tag muzileee/yunx-server:latest \
+            muzileee/yunx-server:"$VERSION"-amd64 \
+            muzileee/yunx-server:"$VERSION"-arm64
+          docker buildx imagetools inspect muzileee/yunx-server:"$VERSION"

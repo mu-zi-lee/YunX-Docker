@@ -1,0 +1,14 @@
+.git
+.gradle
+**/.gradle
+**/.kotlin
+**/build
+.gradle-home
+.env
+downloads
+data
+.test-data
+.tmp
+release
+docs/images
+*.log

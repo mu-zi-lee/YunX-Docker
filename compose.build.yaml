@@ -1,0 +1,5 @@
+services:
+  yunx:
+    build: .
+    image: yunx-server:local
+    pull_policy: build

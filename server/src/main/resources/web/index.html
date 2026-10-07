@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>云析 YunX</title>
+  <link rel="icon" href="/icon.png">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/lucide.min.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <div class="brand"><img src="/icon.png" alt=""><span>云析 <small>YunX</small></span></div>
+    <nav aria-label="主导航">
+      <button type="button" class="active" data-view="resolve" aria-current="page"><i data-lucide="link"></i>解析</button>
+      <button type="button" data-view="tasks"><i data-lucide="download"></i>下载 <span id="task-count">0</span></button>
+      <button type="button" data-view="accounts"><i data-lucide="key-round"></i>账号</button>
+    </nav>
+    <span class="server-label"><i data-lucide="server"></i>服务器</span>
+  </header>
+  <main>
+    <div id="notice" role="status" hidden></div>
+    <section id="resolve-view">
+      <h1>分享解析</h1>
+      <form id="resolve-form" class="link-form">
+        <label for="link">分享链接</label>
+        <textarea id="link" rows="3" required placeholder="粘贴分享链接或分享文案"></textarea>
+        <div class="form-bottom">
+          <div><label for="password">提取码</label><input id="password" type="text" maxlength="32" autocomplete="off" placeholder="可留空"></div>
+          <button class="primary" type="submit"><i data-lucide="search"></i>解析</button>
+        </div>
+      </form>
+      <div id="browse" hidden>
+        <div class="section-toolbar">
+          <div><span id="platform" class="label"></span><h2 id="share-title"></h2></div>
+          <button id="back" class="icon-button" type="button" aria-label="返回上级" title="返回上级"><i data-lucide="arrow-up"></i></button>
+        </div>
+        <div id="breadcrumbs"></div>
+        <div id="files" class="file-list"></div>
+      </div>
+      <details class="direct-section">
+        <summary>添加直链下载</summary>
+        <form id="direct-form">
+          <label for="direct-url">下载地址</label><input id="direct-url" type="url" required placeholder="https://">
+          <label for="direct-name">文件名</label><input id="direct-name" placeholder="可留空">
+          <button class="primary" type="submit"><i data-lucide="plus"></i>加入下载</button>
+        </form>
+      </details>
+    </section>
+    <section id="tasks-view" hidden>
+      <div class="section-toolbar"><h1>下载任务</h1><button id="refresh" class="icon-button" title="刷新" aria-label="刷新"><i data-lucide="refresh-cw"></i></button></div>
+      <div id="tasks"></div>
+    </section>
+    <section id="accounts-view" hidden>
+      <h1>网盘账号</h1>
+      <div class="account-layout">
+        <div id="account-list" role="list"></div>
+        <form id="account-form">
+          <h2 id="account-title"></h2>
+          <div id="credential-fields"></div>
+          <div class="account-actions">
+            <button type="submit" class="primary"><i data-lucide="save"></i>保存凭证</button>
+            <button id="clear-account" type="button"><i data-lucide="log-out"></i>清除</button>
+          </div>
+        </form>
+      </div>
+    </section>
+  </main>
+  <footer>YunX · AGPL-3.0</footer>
+</body>
+</html>

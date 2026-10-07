@@ -37,6 +37,9 @@ LOG/
 *.iml
 .vscode/
 .DS_Store
+.env
+/downloads/
+/data/
 Thumbs.db
 
 # ---- 日志与崩溃转储 ----

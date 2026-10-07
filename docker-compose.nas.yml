@@ -1,0 +1,24 @@
+services:
+  yunx:
+    image: "${YUNX_IMAGE:-muzileee/yunx-server:latest}"
+    pull_policy: always
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    restart: unless-stopped
+    init: true
+    ports:
+      - "${YUNX_BIND_ADDRESS:-0.0.0.0}:${YUNX_PORT:-8080}:8080"
+    environment:
+      YUNX_USERNAME: "${YUNX_USERNAME:-admin}"
+      YUNX_PASSWORD: "${YUNX_PASSWORD:-}"
+      YUNX_THREADS: "${YUNX_THREADS:-16}"
+      YUNX_CONCURRENCY: "${YUNX_CONCURRENCY:-3}"
+      TZ: "${TZ:-Asia/Shanghai}"
+    volumes:
+      - ./data:/data
+      - ./downloads:/downloads
+    stop_grace_period: 30s
+    mem_limit: 1g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

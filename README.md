@@ -100,6 +100,24 @@
 
 ## 使用
 
+### Docker 服务器部署
+
+已新增浏览器操作的服务器版，可将文件直接下载到服务器目录，支持账号凭证保存、
+分享目录浏览和下载暂停续传。部署入口见 **[Docker 部署说明](docs/DOCKER.md)**：
+
+```sh
+mkdir -p downloads
+sudo chown 1000:1000 downloads
+docker compose up -d
+docker compose exec -T yunx cat /data/initial-password.txt
+```
+
+访问 `http://服务器IP:8080`，用户名 `admin`，密码为上面读取的自动生成密码。
+镜像 `muzileee/yunx-server` 提供 amd64、arm64 构建；NAS 使用 `docker-compose.nas.yml`。
+服务器版的功能范围、首次镜像发布前的本地构建方法见部署说明。
+
+### 桌面版
+
 1. 在「网盘」页登录需要使用的网盘账号（推荐内嵌浏览器登录）
 2. 在「解析」页粘贴分享链接（可带提取码，支持从剪贴板一键粘贴）
 3. 浏览分享内容，点击文件加入下载

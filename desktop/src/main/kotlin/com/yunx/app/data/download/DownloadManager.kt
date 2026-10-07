@@ -36,6 +36,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
@@ -707,6 +708,16 @@ class DownloadManager(
                 dao.updateStatus(id, DownloadTaskEntity.STATUS_PAUSED)
             }
         }
+    }
+
+    /** Server shutdown: let pause finish writing progress before the process exits. */
+    suspend fun shutdown() {
+        val ids = synchronized(jobsLock) { activeJobs.keys.toList() }
+        ids.forEach { pause(it) }
+        withTimeoutOrNull(15_000L) {
+            while (ids.any { dao.get(it)?.status in listOf(0, 1) }) delay(50)
+        }
+        scope.coroutineContext[Job]?.cancelAndJoin()
     }
 
     /**

@@ -1,212 +1,120 @@
 <div align="center">
 
-<img src="desktop/src/main/resources/icon.png" width="120" alt="云析 YunX-Desktop" />
+<img src="desktop/src/main/resources/icon.png" width="88" alt="云析图标" />
 
-# 云析桌面版 · YunX-Desktop
+# 云析 · Docker 网页版
 
-**粘贴分享链接，直接高速下载 —— 云析 YunX 的 Windows 桌面移植**
+基于 [tidain/YunX-Desktop](https://github.com/tidain/YunX-Desktop) 的 Fork 二次开发，
+复用其网盘解析与下载核心，增加可部署在 NAS / Linux 服务器上的 Docker 网页工作台。
 
-识别夸克 / UC / 迅雷 / 百度 / 139 / 123 分享链接，自动匹配提取码，Range 分片并发 + 断点续传。
-
-[![Release](https://img.shields.io/github/v/release/tidain/YunX-Desktop?style=flat-square\&label=release\&color=4C8BF5)](https://github.com/tidain/YunX-Desktop/releases/latest)
-[![Stars](https://img.shields.io/github/stars/tidain/YunX-Desktop?style=flat-square\&logo=github\&color=4C8BF5)](https://github.com/tidain/YunX-Desktop/stargazers)
-[![License](https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square)](./LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows-0078D6?style=flat-square\&logo=windows\&logoColor=white)](#构建)
-[![Kotlin](https://img.shields.io/badge/Kotlin-7F52FF?style=flat-square\&logo=kotlin\&logoColor=white)](https://kotlinlang.org/)
-[![Compose](https://img.shields.io/badge/Compose%20Multiplatform-Desktop-4285F4?style=flat-square\&logo=jetpackcompose\&logoColor=white)](https://www.jetbrains.com/lp/compose-multiplatform/)
-
-[下载最新版](https://github.com/tidain/YunX-Desktop/releases/latest) · [功能](docs/FEATURES.md) · [使用](docs/USAGE.md) · [构建](docs/BUILD.md) · [常见问题](#常见问题) · [与上游差异](docs/UPSTREAM-DIFF.md)
+[Docker Hub](https://hub.docker.com/r/muzileee/yunx-server) ·
+[本仓库发布页](https://github.com/mu-zi-lee/YunX-Desktop/releases) ·
+[NAS 部署](#nas-部署) ·
+[Web 与 Windows 功能对照](docs/WEB-FEATURES.md)
 
 </div>
 
-***
+> 这是 **Docker 网页版** 的仓库首页。Windows 桌面版由上游 [tidain/YunX-Desktop](https://github.com/tidain/YunX-Desktop)
+> 开发；更早的 Android 项目为 [CYQawa/YunX](https://github.com/CYQawa/YunX)。
+> 本 Fork 保留桌面版源码与文档，并在独立的 `server/` 模块实现网页服务。
 
-> **云析永远免费开源。** 如果你是在任何地方「花钱买到」的，说明你被骗了，请立即退款。
-> 任何收费版本均为二次打包的诈骗版本，与本项目无关。
+## 界面预览
 
-> **本项目使用 AGPL-3.0 开源协议。** 基于上游 [CYQawa/YunX](https://github.com/CYQawa/YunX)（Android）移植，
-> 若你使用了本项目的代码，请同样以 AGPL-3.0 开放源代码。
+下方账号、容量与文件内容是浏览器测试使用的**演示数据**，不是实际网盘账号的容量或真实下载结果。
 
-## 简介
+![深色模式下的个人网盘目录、搜索和文件列表](docs/images/web/cloud-desktop.png)
 
-云析 YunX 的 **Windows 桌面移植版**：粘贴网盘分享链接，浏览分享内容并直接高速下载文件，全程在电脑上完成。
-提供**免安装便携版**（整个文件夹拷走即用）与**安装版**（开始菜单 / 桌面快捷方式，可卸载）两种分发形式。
+<table>
+  <tr>
+    <td width="73%"><img src="docs/images/web/accounts-desktop.png" alt="浅色模式下已配置账号、容量与未配置平台" /></td>
+    <td width="27%"><img src="docs/images/web/login-mobile.png" alt="手机上的网页登录页面" /></td>
+  </tr>
+  <tr>
+    <td align="center">账号与容量 · 桌面浏览器</td>
+    <td align="center">登录 · 手机浏览器</td>
+  </tr>
+</table>
 
-## 截图
+## Docker 版能做什么
 
-|                                                          |                                                            |
-| :------------------------------------------------------: | :--------------------------------------------------------: |
-| <img src="docs/images/主界面.png" width="430" alt="主界面" />   | <img src="docs/images/网盘登录.png" width="430" alt="网盘登录" />   |
-|                           主界面                           |                           网盘登录                           |
-| <img src="docs/images/设置.png" width="430" alt="设置" />     | <img src="docs/images/关于.png" width="430" alt="关于" />     |
-|                            设置                            |                            关于                            |
+- **个人网盘**：浏览夸克、UC、百度、139、115、123、光鸭与迅雷的目录，支持面包屑、当前目录搜索、排序、列表/网格和逐文件多选下载。迅雷个人目录需要 App 通道凭证。
+- **分享解析**：解析支持平台的分享链接，浏览目录并加入下载；另支持 GitHub 仓库、账号及直链。可收藏链接并查看最近解析记录。
+- **账号管理**：在网页中手动添加 Cookie / Token，已配置账号和未配置平台分开显示；可查询接口提供的昵称与存储空间，用量无法获取时显示未知。凭证加密存储，不在页面回显。
+- **服务器下载**：复用分片下载器，支持任务状态、暂停/继续、断点续传和下载限速。关闭浏览器后任务仍在服务器运行，文件写入挂载的下载目录。
+- **网页登录**：首次启动生成随机密码，提供登录、退出和修改密码；下载线程、并发数与限速可在设置页保存。支持浅色、黑色及跟随系统主题。
 
-## 支持平台
+**功能边界：** 网页版采用手动填写网盘凭证，尚无 Windows 版的内嵌浏览器、扫码/短信登录、浏览器 Cookie 导入、系统托盘、剪贴板监听、整文件夹下载和云端文件改名/删除等功能。
+完整差异见 [Web 与 Windows 功能对照](docs/WEB-FEATURES.md)。网盘接口可能随平台变化；保存凭证不表示已经验证账号有效。
 
-- 夸克网盘
+## NAS 部署
 
-- UC 网盘
+在 NAS 的容器管理器中创建 Compose 项目，使用 [docker-compose.nas.yml](docker-compose.nas.yml)。
+在**项目所在目录**创建 `data` 和 `downloads` 两个专用文件夹，并授予运行容器的 UID/GID（默认 `1000:1000`）写入权限。
+默认镜像是 Docker Hub 的 `muzileee/yunx-server:latest`，支持 Linux amd64 / arm64。
 
-- 迅雷网盘
+| NAS 项目目录 | 容器路径 | 内容 |
+| --- | --- | --- |
+| `./data` | `/data` | 登录密码、网盘凭证及密钥、数据库、任务与缓存 |
+| `./downloads` | `/downloads` | 下载的文件和续传所需文件 |
 
-- 百度网盘
-
-- 139 网盘（和彩云）
-
-- 123 云盘
-
-- GitHub（仓库 / 账号 / 文件直链）
-
-> \[!WARNING]
-> **不建议使用百度网盘，可能导致账号被风控！**
-
-## 功能
-
-- **分享链接解析** —— 识别夸克 / UC / 迅雷 / 百度 / 139 / 123 分享链接并自动匹配提取码，另支持 GitHub 仓库 / 账号 / 文件直链
-
-- **高速下载** —— Range 分片并发 + 断点续传 + 失败自动重试 + 全局限速
-
-- **GitHub 浏览与 README 渲染** —— 浏览仓库文件树 / Releases / 账号仓库列表，README 与更新说明以 GFM Markdown 渲染（支持镜像加速）
-
-- **通知中心进度** —— 下载进度实时显示为 Windows 通知中心 toast 进度条（多任务聚合 + 实时速度）
-
-- **多种登录方式** —— 内嵌 Chromium 登录 / 一键导入本机浏览器 Cookie / 手动粘贴 Cookie；GitHub 可选 Personal Access Token
-
-- **Windows 系统集成** —— 原生托盘菜单（亮暗跟随系统配色）、原生文件对话框、剪贴板分享链接检测
-
-- **桌面体验** —— 深色模式 + 自定义种子色、链接收藏、解析历史、窗口内弹窗覆盖层
-
-- **网络** —— GitHub 下载镜像前缀、HTTP 代理（便于加速或直连受限的场景）
-
-完整功能清单见 **[功能清单](docs/FEATURES.md)**。
-
-## 与上游的差异
-
-桌面版在**登录方式、系统集成（托盘 / 通知 / 原生对话框）、数据存储、构建分发**上做了较大改造，
-并移除了一部分移动端专属功能。完整清单见 **[与上游的差异](docs/UPSTREAM-DIFF.md)**。
-
-## 技术栈
-
-| 分类          | 选型                                                 |
-| ----------- | -------------------------------------------------- |
-| 语言          | Kotlin                                             |
-| UI          | Compose Multiplatform（Desktop）+ Material 3         |
-| 持久化         | `sqlite-jdbc`（SQLite）+ `java.util.prefs`           |
-| 网络          | OkHttp 4.12.0（请求 + 分片下载）                           |
-| 内嵌浏览器       | JCEF 132（Chromium）                                 |
-| 原生桥接        | JNA（Win32 API）+ 自编 `darkmode.dll`                  |
-| 构建分发        | Gradle + jlink + jpackage + Inno Setup             |
-| Markdown 渲染 | multiplatform-markdown-renderer（GFM：README / 更新说明） |
-
-## 使用
-
-### Docker 服务器部署
-
-已新增浏览器操作的服务器版，可将文件直接下载到服务器目录，支持账号凭证保存、
-个人网盘与分享目录浏览、容量展示、多选下载、收藏/历史和下载暂停续传。
-提供明暗主题、自带登录页面和密码修改。部署入口见 **[Docker 部署说明](docs/DOCKER.md)**：
+项目启动后，浏览器打开 `http://NAS的IP:8080`，用户名默认 `admin`。
+若 `YUNX_PASSWORD` 留空，首次密码在容器终端执行以下命令读取：
 
 ```sh
-mkdir -p downloads
-sudo chown 1000:1000 downloads
-docker compose up -d
-docker compose exec -T yunx cat /data/initial-password.txt
+cat /data/initial-password.txt
 ```
 
-访问 `http://服务器IP:8080`，用户名 `admin`，密码为上面读取的自动生成密码。
-镜像 `muzileee/yunx-server` 提供 amd64、arm64 构建；NAS 使用 `docker-compose.nas.yml`。
-服务器版的功能范围、首次镜像发布前的本地构建方法见部署说明。
+登录后可在“设置 → 登录与安全”修改密码；修改后初始密码文件会删除。若显式设置了非空 `YUNX_PASSWORD`，密码由部署配置管理，网页不能修改。
+请保留并备份整个 `data` 和 `downloads` 目录，不要只备份数据库；加密密钥也保存在 `data` 中。
 
-### 桌面版
+通过 SSH 部署到新建的项目目录：
 
-1. 在「网盘」页登录需要使用的网盘账号（推荐内嵌浏览器登录）
-2. 在「解析」页粘贴分享链接（可带提取码，支持从剪贴板一键粘贴）
-3. 浏览分享内容，点击文件加入下载
-4. 在「下载」页查看进度，支持暂停 / 继续 / 删除 / 打开；进度同步显示在 Windows 通知中心
-
-设置项、数据目录、托盘操作见 **[使用说明](docs/USAGE.md)**。
-
-## 构建
-
-要求：Windows 10/11 x64，另需一个 **C++ 编译器**（托盘菜单配色桥接层用；缺它时 `run` / `package` /
-`installer` 会在这一步失败）。JDK、Gradle、Inno Setup 均无需手动安装。
-
-```powershell
-git clone https://github.com/tidain/YunX-Desktop.git
+```sh
+git clone https://github.com/mu-zi-lee/YunX-Desktop.git
 cd YunX-Desktop
-
-.\run.ps1 run        # 编译并启动（开发，含 darkmode.dll）
-.\run.ps1 build      # 仅编译 Kotlin（不需要 C++ 编译器）
-.\run.ps1 package    # 免安装便携版 → release\YunX-Desktop\
-.\run.ps1 installer  # 单文件安装程序 → release\YunX-Desktop-setup-*.exe
+mkdir -p data downloads
+sudo chown 1000:1000 data downloads
+docker compose -f docker-compose.nas.yml up -d
+docker compose -f docker-compose.nas.yml exec -T yunx cat /data/initial-password.txt
 ```
 
-环境要求、版本号管理与打包产物见 **[构建与打包](docs/BUILD.md)**。
+上面的 `chown` 仅适用于新建的专用目录；已有 NAS 共享目录可用 ACL 授予容器用户写入权限。
+仓库根目录的 [compose.yaml](compose.yaml) 使用 **Docker 命名卷**保存 `/data`，适合常规服务器部署；需要数据都落在所选项目目录时，请使用 NAS 配置。
 
-## 常见问题
+## 更新与配置
 
-<details>
-<summary><b>百度网盘下载 / 转存不了？</b></summary>
+备份数据目录后，在 NAS 界面重新拉取镜像并重建项目，保留原挂载目录；原有登录密码、账号和任务会继续使用。
+SSH 部署可执行：
 
-账号被风控了，详见上游 issue #9。
+```sh
+docker compose -f docker-compose.nas.yml pull
+docker compose -f docker-compose.nas.yml up -d
+```
 
-</details>
+如需固定版本，将 `YUNX_IMAGE` 设为 `muzileee/yunx-server:0.2.0`；默认使用 `latest`。
+可通过 Compose 环境变量设置端口、用户名、密码和下载参数，完整说明见 [Docker 部署文档](docs/DOCKER.md)。
+需要从公网访问时，请使用 HTTPS 反向代理保护登录信息和网盘凭证。
 
-<details>
-<summary><b>便携版和安装版有什么区别？</b></summary>
+## 与上游的关系
 
-便携版是免安装的文件夹，拷到任意位置双击 `YunX-Desktop.exe` 即可运行；
-安装版走安装向导，安装到 `%LOCALAPPDATA%\Programs\YunX-Desktop`，并创建开始菜单 / 桌面快捷方式，可在设置中卸载。
-两者功能完全一致。
+| 项目 | 主要内容 |
+| --- | --- |
+| [CYQawa/YunX](https://github.com/CYQawa/YunX) | 最初的 Android 项目 |
+| [tidain/YunX-Desktop](https://github.com/tidain/YunX-Desktop) | Windows 桌面移植、网盘 API、分享解析与下载器 |
+| 本仓库 `mu-zi-lee/YunX-Desktop` | 基于 Windows 版 Fork 的 Docker 服务端、网页登录、NAS 部署和双架构镜像发布 |
 
-</details>
+Windows 应用本身仍在仓库的 `desktop/` 目录中；Windows 的使用方式、功能与构建分别见
+[使用说明](docs/USAGE.md)、[桌面功能清单](docs/FEATURES.md) 和 [构建说明](docs/BUILD.md)。
+需要上游的 Windows 安装包，请前往 [原桌面版发布页](https://github.com/tidain/YunX-Desktop/releases)。
 
-<details>
-<summary><b>下载时看不到 Windows 通知中心的通知？</b></summary>
+## 开发与验证
 
-先确认「设置 → 系统 → 通知」已开启（专注助手 / 免打扰也会拦通知）。应用在检测到通知未送达时，
-会尝试自动创建所需的开始菜单快捷方式兜底，但最终能否弹出仍取决于系统通知设置。
-
-</details>
-
-## 支持开发
-
-- **GitHub Star**：给 [tidain/YunX-Desktop](https://github.com/tidain/YunX-Desktop) 点个 Star ⭐
-
-- **提交 Issues**：发现 Bug 或有功能建议欢迎反馈
-
-- **赞赏**：应用内「支持开发」页面可扫码赞赏原安卓项目作者（CYQawa）与桌面移植作者（tidain）
-
-## 文档
-
-| 文档                              | 内容                             |
-| ------------------------------- | ------------------------------ |
-| [功能清单](docs/FEATURES.md)        | 全部功能与细节                        |
-| [使用说明](docs/USAGE.md)           | 快速上手、登录方式、设置项、数据目录、托盘操作        |
-| [构建与打包](docs/BUILD.md)          | 环境要求、命令、版本号、打包产物、目录结构          |
-| [与上游的差异](docs/UPSTREAM-DIFF.md) | 桌面版相对上游 Android 版的新增 / 重做 / 移除 |
-| [免责声明](docs/DISCLAIMER.md)      | 免责声明、协议逆向说明、反倒卖、开源协议           |
+`server/` 是独立的 Gradle 服务模块，复用 `desktop/` 中不依赖图形界面的网盘协议、数据库和下载代码。
+常规推送由 GitHub Actions 分别在 amd64、arm64 上构建并运行容器测试；发布 `server-v*` 标签时，在测试通过后推送多架构镜像到 Docker Hub。
+本地测试及构建方式见 [Docker 部署文档](docs/DOCKER.md#本地开发与验证)。
+浏览器测试使用模拟网盘响应和本地 HTTP 下载源；真实网盘容量、平台风控以及具体 NAS 设备需要使用实际账号进一步验证。
 
 ## 开源协议
 
-本项目基于上游 [CYQawa/YunX](https://github.com/CYQawa/YunX) 移植，同样以
-[GNU AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html) 协议开源，详见 [LICENSE](LICENSE)。
-完整的免责与合规说明见 **[免责声明](docs/DISCLAIMER.md)**。
-
-## 更多
-
-- 原安卓项目仓库：<https://github.com/CYQawa/YunX>
-
-- PC 移植版仓库：<https://github.com/tidain/YunX-Desktop>
-
-- 问题与建议：<https://github.com/tidain/YunX-Desktop/issues>
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=tidain%2Fyunx-desktop&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=tidain/yunx-desktop&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=tidain/yunx-desktop&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=tidain/yunx-desktop&type=date&legend=top-left" />
- </picture>
-</a>
+本项目沿用上游的 [GNU AGPL-3.0](LICENSE) 协议，保留原作者署名。
+本 Fork 完全免费开源；平台兼容性及使用边界见 [免责声明](docs/DISCLAIMER.md)。

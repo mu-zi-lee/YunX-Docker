@@ -8,7 +8,7 @@
 复用其网盘解析与下载核心，增加可部署在 NAS / Linux 服务器上的 Docker 网页工作台。
 
 [Docker Hub](https://hub.docker.com/r/muzileee/yunx-server) ·
-[本仓库发布页](https://github.com/mu-zi-lee/YunX-Desktop/releases) ·
+[本仓库发布页](https://github.com/mu-zi-lee/YunX-Docker/releases) ·
 [NAS 部署](#nas-部署) ·
 [Web 与 Windows 功能对照](docs/WEB-FEATURES.md)
 
@@ -20,7 +20,8 @@
 
 本仓库另提供 **Apple Silicon macOS 本地精简版**：使用与 Web 版一致的视觉风格，
 手动配置网盘凭证、浏览与解析文件、下载到 Mac 本机，无需 Docker。
-安装、功能边界及构建方式见 [macOS 说明](docs/MACOS.md)。
+安装包位于 [GitHub Releases](https://github.com/mu-zi-lee/YunX-Docker/releases)，
+选择 `macos-v*` 预发布版本中的 arm64 DMG；安装、功能边界及构建方式见 [macOS 说明](docs/MACOS.md)。
 
 ## 界面预览
 

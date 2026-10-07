@@ -8,6 +8,8 @@ plugins {
     id("org.jetbrains.compose")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+val macVersion = project.file("version.txt").readText().trim()
+require(macVersion.matches(Regex("""[1-9]\d*\.\d+\.\d+"""))) { "Invalid macOS version: '$macVersion'" }
 java {
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
@@ -72,7 +74,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg)
             packageName = "YunX"
-            packageVersion = "1.0.0"
+            packageVersion = macVersion
             description = "YunX local netdisk downloader"
             vendor = "YunX contributors"
             copyright = "Copyright (C) 2026 tidain and YunX contributors"
@@ -101,7 +103,7 @@ tasks.matching { it.name == "packageDmg" }.configureEach {
             into(File(stage, "YunX.app"))
         }
         Files.createSymbolicLink(File(stage, "Applications").toPath(), Path.of("/Applications"))
-        val output = layout.buildDirectory.file("compose/binaries/main/dmg/YunX-1.0.0.dmg").get().asFile
+        val output = layout.buildDirectory.file("compose/binaries/main/dmg/YunX-$macVersion-macos-arm64.dmg").get().asFile
         output.parentFile.mkdirs()
         exec {
             commandLine("/usr/bin/hdiutil", "create", "-volname", "YunX", "-srcfolder", stage.absolutePath,

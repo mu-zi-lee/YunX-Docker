@@ -6,7 +6,8 @@
 
 ## 安装与使用
 
-打开 `YunX-1.0.0.dmg`，将 YunX 拖入 Applications，再启动应用。
+从仓库 GitHub Releases 下载 `YunX-<版本>-macos-arm64.dmg`，
+将 YunX 拖入 Applications，再启动应用。
 本地测试包未做 Developer ID 签名与公证；如果 macOS 阻止启动，可在系统
 “隐私与安全性”中允许打开。不要使用来历不明的重新打包版本。
 
@@ -55,7 +56,7 @@ gradle :desktop:test
 输出位置：
 
 - `macos/build/compose/binaries/main/app/YunX.app`
-- `macos/build/compose/binaries/main/dmg/YunX-1.0.0.dmg`
+- `macos/build/compose/binaries/main/dmg/YunX-<版本>-macos-arm64.dmg`
 
 Mac 模块直接编译必要的共享源码，并在进程内复用服务逻辑。
 它不启动 HTTP 服务，也不包含 Windows 系统集成、JCEF 或 Gopeed 实现。
@@ -65,7 +66,19 @@ Windows 和 Server 各自保留原有入口。
 
 验证细节和未完成的真实账号验收见 [Mac 验证记录](MACOS-VALIDATION.md)。
 后续全功能适配的差距见 [移植进度](PORTING.md)。
-GitHub Actions 的 macOS 工作流负责测试和生成安装包，不自动公开发布。
+GitHub Actions 在普通推送和 PR 中测试并保留安装包。
+Mac 版本号由 `macos/version.txt` 独立维护；发版前更新该文件和
+`macos/RELEASE-NOTES.md`，提交并推送，然后推送与版本一致的标签：
+
+```sh
+git tag -a macos-v1.0.0 -m "YunX macOS v1.0.0"
+git push origin macos-v1.0.0
+```
+
+标签触发 Mac、Windows、Server 和 Docker 双架构检查，全部通过后自动创建
+GitHub 预发布 Release，附带 DMG 和 `SHA256SUMS`。版本标签不匹配时停止发布。
+只对发布任务授予 Release 写权限；已发布的安装包不会被重新运行覆盖。
+不触发 Docker 镜像发布，也不替换现有稳定版的 Latest 标识。
 首版仅交付 arm64；Intel、Developer ID 签名、公证和自动更新未纳入本版。
 
 沿用原作者 tidain 的署名和 AGPL-3.0 协议；其他项目来源见仓库 README。

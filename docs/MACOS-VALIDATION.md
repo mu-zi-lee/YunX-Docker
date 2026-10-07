@@ -61,7 +61,7 @@ RESUME_SMOKE_OK: restored progress, matching file bytes, Finder reveal
 
 - 没有 Developer ID 签名与 Apple 公证；没有验证从公网下载后的 Gatekeeper 放行体验。
 - 没有 Intel Mac、Windows 原生系统功能或真实 NAS 的实机验收。
-- 本记录的本地验证不包含 GitHub Actions；远端 CI 结果以对应提交的 Actions 运行记录为准。没有公开发布安装包或迁移用户数据。
+- 本记录的本地验证不包含 GitHub Actions；远端 CI 和安装包发布结果以对应提交的 Actions 与 Release 记录为准。没有迁移用户数据。
 - 原生账户表单的完整人工操作和所有网盘端到端流程仍需有效凭证进行验收。
 
 测试源码位于 `macos/src/test`。界面与随包进程检查使用隔离的数据目录，

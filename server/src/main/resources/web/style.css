@@ -89,7 +89,8 @@ form>button{margin-top:16px}
 .segmented{display:inline-flex;border:1px solid var(--visible);border-radius:6px;padding:3px;gap:2px;max-width:100%}
 .segmented button{padding:8px 12px;min-height:36px;white-space:nowrap;font-size:12px}
 .segmented .active{background:var(--display);color:var(--bg)}
-.selection-bar{display:flex;align-items:center;justify-content:space-between;padding:12px 0;gap:12px}
+.selection-bar{display:flex;align-items:center;justify-content:space-between;padding:12px 0;gap:12px;flex-wrap:wrap}
+.cloud-delete-detail{white-space:pre-wrap;overflow-wrap:anywhere}
 .select-all{display:flex;align-items:center;gap:12px;margin:0;color:var(--secondary)}
 .file-header,.file-row{display:grid;grid-template-columns:24px 24px minmax(0,1fr) 100px 120px 44px;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
 .file-header{font-size:12px;color:var(--secondary)}

@@ -2,6 +2,7 @@ package com.yunx.app.data.update
 
 import com.yunx.app.APP_VERSION
 import com.yunx.app.data.network.HttpClients
+import com.yunx.app.data.network.GitHubDownloadMirror
 import com.yunx.app.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -26,10 +27,10 @@ object UpdateChecker {
     private const val TAG = "YunX-Update"
 
     /** GitHub 下载加速镜像站前缀（国内直连 GitHub 慢/失败时的兜底下载通道） */
-    const val MIRROR_PREFIX = "https://cdn.gh-proxy.org/"
+    const val MIRROR_PREFIX = GitHubDownloadMirror.DEFAULT_PREFIX
 
     /** 把 GitHub release 直链转成镜像站直链：<prefix><原直链>；默认使用内置镜像前缀 */
-    fun mirrorUrl(url: String, prefix: String = MIRROR_PREFIX): String = prefix + url
+    fun mirrorUrl(url: String, prefix: String = MIRROR_PREFIX): String = GitHubDownloadMirror.url(url, prefix)
 
     data class Asset(
         val name: String,

@@ -101,5 +101,15 @@
     </form>
   </dialog>
   <dialog id="confirm-dialog"><div class="dialog-heading"><h2>移除账号</h2></div><p id="confirm-text"></p><div class="toolbar"><button id="confirm-cancel" class="secondary" type="button">取消</button><button id="confirm-remove" class="destructive" type="button">移除</button></div></dialog>
+  <dialog id="cloud-action-dialog">
+    <div class="dialog-heading"><h2 id="cloud-action-title"></h2><button id="cloud-action-close" class="icon-button" type="button" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div>
+    <form id="cloud-action-form">
+      <div id="cloud-name-field"><label for="cloud-action-name">名称</label><input id="cloud-action-name" maxlength="255"></div>
+      <div id="cloud-target-field"><label for="cloud-action-target">目标文件夹</label><select id="cloud-action-target"></select></div>
+      <p id="cloud-delete-detail" class="cloud-delete-detail"></p>
+      <p id="cloud-action-status" class="inline-status" role="status"></p>
+      <div class="toolbar"><button id="cloud-action-submit" class="primary" type="submit">确认</button><button id="cloud-action-cancel" class="secondary" type="button">取消</button></div>
+    </form>
+  </dialog>
 </body>
 </html>

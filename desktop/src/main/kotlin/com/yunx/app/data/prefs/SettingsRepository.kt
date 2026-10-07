@@ -8,7 +8,7 @@ import java.util.prefs.Preferences
  */
 class SettingsRepository {
 
-    private val prefs: Preferences = Preferences.userRoot().node("yunx/settings")
+    private val prefs: Preferences = Preferences.userRoot().node("${System.getProperty("yunx.preferenceRoot", "yunx")}/settings")
 
     /** 下载线程数（通用/手动添加，分片并发数），默认 32，上限 512 */
     var downloadThreads: Int

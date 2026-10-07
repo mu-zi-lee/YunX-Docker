@@ -13,14 +13,16 @@ kotlin.sourceSets["main"].kotlin.apply {
     include("com/yunx/server/**")
     include("com/yunx/app/AppContext.kt")
     include("com/yunx/app/data/db/**", "com/yunx/app/data/security/**")
+    include("com/yunx/app/data/backup/AuthCrypto.kt")
     include("com/yunx/app/data/network/**", "com/yunx/app/data/download/**")
     include("com/yunx/app/data/repository/*ResolveRepository.kt")
     include("com/yunx/app/data/repository/TransferSpaceGuard.kt")
     include("com/yunx/app/data/repository/ILanzouAccountRepository.kt")
-    include("com/yunx/app/data/gopeed/GopeedEngine.kt", "com/yunx/app/data/prefs/**")
+    include("com/yunx/app/data/gopeed/**", "com/yunx/app/data/prefs/**")
     include("com/yunx/app/util/Log.kt", "com/yunx/app/util/LogRedactor.kt")
     include("com/yunx/app/util/DiagnosticLog.kt", "com/yunx/app/util/DesktopActions.kt")
     include("com/yunx/app/util/WindowsToastNotifier.kt", "com/yunx/app/util/WindowsKeepAwake.kt")
+    include("com/yunx/app/util/WindowsDownloadEvents.kt")
     include("com/yunx/app/util/WindowsTitleBar.kt", "com/yunx/app/util/WindowsFolderPicker.kt")
     include("com/yunx/app/util/WindowsFilePicker.kt")
 }
@@ -31,7 +33,9 @@ kotlin.sourceSets["test"].kotlin.apply {
     include("com/yunx/app/data/download/DownloadPathPolicyTest.kt")
     include("com/yunx/app/data/download/HttpRangePolicyTest.kt")
     include("com/yunx/app/data/download/HlsRequestPolicyTest.kt")
+    include("com/yunx/app/data/gopeed/**")
     include("com/yunx/app/data/network/ShareLinkParserTest.kt")
+    include("com/yunx/app/data/network/BaiduFileManagementTest.kt")
     include("com/yunx/app/util/LogRedactorTest.kt")
 }
 java {

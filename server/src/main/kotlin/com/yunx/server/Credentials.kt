@@ -21,12 +21,18 @@ class Credentials(private val file: File) {
 
     @Synchronized
     fun save(platform: String, value: JSONObject) {
-        val next = JSONObject(entries.toString()).put(platform, value)
+        saveAll(mapOf(platform to value))
+    }
+
+    @Synchronized
+    fun saveAll(values: Map<String, JSONObject>) {
+        val next = JSONObject(entries.toString())
+        values.forEach { (platform, value) -> next.put(platform, JSONObject(value.toString())) }
         file.parentFile.mkdirs()
         val tmp = File(file.parentFile, "${file.name}.tmp")
         tmp.writeText(cipher.encrypt(next.toString(), "server-credentials"))
         Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
-        entries.put(platform, JSONObject(value.toString()))
+        values.forEach { (platform, value) -> entries.put(platform, JSONObject(value.toString())) }
     }
 
     fun credential(platform: String): String {

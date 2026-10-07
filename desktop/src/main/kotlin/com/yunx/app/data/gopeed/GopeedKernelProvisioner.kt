@@ -1,7 +1,7 @@
 package com.yunx.app.data.gopeed
 
 import com.yunx.app.data.network.HttpClients
-import com.yunx.app.data.update.UpdateChecker
+import com.yunx.app.data.network.GitHubDownloadMirror
 import com.yunx.app.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -35,8 +35,6 @@ object GopeedKernelProvisioner {
     private const val RELEASES_LATEST_URL = "https://api.github.com/repos/GopeedLab/gopeed/releases/latest"
 
     /** 官方包名前缀/后缀：`gopeed-web-v1.9.3-windows-amd64.zip` */
-    private const val ASSET_PREFIX = "gopeed-web-"
-    private const val ASSET_ARCH_SUFFIX = ".zip"
 
     /** 内核包并行下载连接数（Range 分片并发）；服务器不支持 Range 时自动回退单连接流式下载 */
     private const val KERNEL_CONNECTIONS = 32
@@ -80,35 +78,28 @@ object GopeedKernelProvisioner {
     )
 
     /** 本机对应的官方包架构后缀：x86_64 → amd64，aarch64 → arm64 */
-    private fun archSuffix(): String {
-        val arch = System.getProperty("os.arch").orEmpty().lowercase()
-        return when {
-            arch.contains("aarch64") || arch.contains("arm64") -> "arm64"
-            else -> "amd64"
-        }
-    }
 
     /**
      * 查询官方最新 Release，拼出本机可用的内核计划。
      * @param mirrorPrefix 用户配置的镜像前缀；null/空用内置默认镜像
      */
     suspend fun resolvePlan(mirrorPrefix: String?): Plan = withContext(Dispatchers.IO) {
-        val mirror = mirrorPrefix?.takeIf { it.isNotBlank() } ?: UpdateChecker.MIRROR_PREFIX
+        val mirror = mirrorPrefix?.takeIf { it.isNotBlank() } ?: GitHubDownloadMirror.DEFAULT_PREFIX
         val json = fetchLatestJson()
         val tag = json.optString("tag_name")
         if (tag.isBlank()) throw IllegalStateException("官方 Release 缺少版本号")
-        val wanted = "$ASSET_PREFIX$tag-windows-${archSuffix()}$ASSET_ARCH_SUFFIX"
+        val wanted = GopeedPlatform.current().archiveName(tag)
         val asset = json.optJSONArray("assets")?.let { arr ->
             (0 until arr.length())
                 .mapNotNull { arr.optJSONObject(it) }
                 .firstOrNull { it.optString("name").equals(wanted, ignoreCase = true) }
-        } ?: throw IllegalStateException("官方 Release（$tag）里没有 Windows 内核包 $wanted")
+        } ?: throw IllegalStateException("官方 Release（$tag）里没有本机内核包 $wanted")
         val direct = asset.optString("browser_download_url")
         if (direct.isBlank()) throw IllegalStateException("内核包缺少下载地址")
         Plan(
             version = tag,
             assetName = wanted,
-            url = UpdateChecker.mirrorUrl(direct, mirror),
+            url = GitHubDownloadMirror.url(direct, mirror),
             fallbackUrl = direct,
             size = asset.optLong("size"),
             digest = asset.optString("digest")

@@ -73,6 +73,23 @@ class WebServerTest {
     }
 
     @Test
+    fun `lanzou platforms expose manual credentials without leaking secrets`() {
+        val invalid = """{"platform":"ILANZOU","credentials":{"accessToken":"private-token"}}"""
+        assertEquals(400, request("/api/accounts", invalid).first)
+        val valid = """{"platform":"ILANZOU","credentials":{"accessToken":"private-token","uuid":"private-device"}}"""
+        assertEquals(200, request("/api/accounts", valid).first)
+        val accounts = request("/api/accounts").second
+        assertFalse(accounts.contains("private-token"))
+        assertFalse(accounts.contains("private-device"))
+        val list = JSONArray(accounts)
+        for (platform in listOf("ILANZOU", "LANZOU")) {
+            val entry = (0 until list.length()).map { list.getJSONObject(it) }.single { it.getString("platform") == platform }
+            assertTrue(entry.getBoolean("cloudSupported"))
+        }
+        assertEquals("private-device", Credentials(accountFile).get("ILANZOU").getString("uuid"))
+    }
+
+    @Test
     fun `login shell is public but data requires authentication`() {
         assertEquals(200, request("/health", authorized = false).first)
         assertEquals(200, request("/", authorized = false).first)

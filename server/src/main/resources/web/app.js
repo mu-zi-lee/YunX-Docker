@@ -1,6 +1,6 @@
 "use strict";
 const $ = id => document.getElementById(id);
-const names = { QUARK:"夸克网盘", UC:"UC 网盘", XUNLEI:"迅雷网盘", BAIDU:"百度网盘", C139:"139 网盘", PAN123:"123 云盘", PAN115:"115 网盘", GUANGYA:"光鸭云盘", GITHUB:"GitHub" };
+const names = { QUARK:"夸克网盘", UC:"UC 网盘", XUNLEI:"迅雷网盘", BAIDU:"百度网盘", C139:"139 网盘", PAN123:"123 云盘", PAN115:"115 网盘", GUANGYA:"光鸭云盘", ILANZOU:"蓝奏优享", LANZOU:"蓝奏云", GITHUB:"GitHub" };
 const statuses = ["等待中","下载中","已暂停","已完成","失败"];
 let activeView = "cloud", accountStates = [], taskStates = [], taskFilter = "all", loggedIn = false, pendingRemoval = "", libraryTab = "bookmarks";
 let libraryData = {bookmarks:[],history:[]};
@@ -131,6 +131,7 @@ document.querySelectorAll(".reveal").forEach(button => button.addEventListener("
 function credentialFields(platform) {
   if (platform === "XUNLEI") return [["accessToken","Access Token"],["refreshToken","Refresh Token"],["deviceId","Device ID"],["captchaToken","Captcha Token"]];
   if (platform === "GUANGYA") return [["accessToken","Access Token"],["deviceId","Device ID"],["deviceSign","Device Sign"]];
+  if (platform === "ILANZOU") return [["accessToken","App Token"],["uuid","UUID"]];
   if (["PAN123","GITHUB"].includes(platform)) return [["accessToken",platform === "GITHUB" ? "Personal Access Token" : "Access Token"]];
   return [["cookie","Cookie"]];
 }
@@ -140,7 +141,7 @@ function accountFields() {
   for (const [key,label] of credentialFields(platform)) {
     const input = el("input"); input.id = "credential-"+key; input.name = key; input.type = "password";
     input.autocomplete = "off"; input.maxLength = 65536;
-    input.required = ["cookie","accessToken"].includes(key);
+    input.required = ["cookie","accessToken","uuid"].includes(key);
     const node = el("label","",label); node.htmlFor = input.id;
     $("credential-fields").append(node,input);
   }
@@ -170,7 +171,7 @@ $("account-form").addEventListener("submit", event => {
     const credentials = Object.fromEntries([...$("credential-fields").querySelectorAll("input,select")].map(input => [input.name,input.value.trim()]));
     await api("accounts", { platform,credentials });
     $("account-form").reset(); $("account-dialog").close(); delete browsers.cloud;
-    await loadAccounts(); notice("账号已保存"); refreshProfiles();
+    await loadAccounts(); notice("凭证已保存，尚未验证"); refreshProfiles();
   }, "account-status");
 });
 async function loadAccounts() {
@@ -356,7 +357,7 @@ function buildBrowser(state) {
   label.append(checkbox,el("span","","全选")); selection.append(label);
   const queue = command("下载所选文件","download",async () => {
     let success = 0; const errors = [];
-    for (const file of state.files.filter(f => state.selected.has(f.fid || f.url))) {
+    for (const file of state.files.filter(f => !f.directory && state.selected.has(f.fid || f.url))) {
       try { await downloadFile(state,file); success++; state.selected.delete(file.fid || file.url); }
       catch (error) { errors.push(file.name+"："+error.message); }
     }
@@ -364,12 +365,21 @@ function buildBrowser(state) {
     renderFiles(state);
   },"secondary");
   checkbox.addEventListener("change",() => {
-    for (const file of visibleFiles(state).filter(f => !f.directory && !state.result.repositories)) {
+    for (const file of visibleFiles(state).filter(f => (state.kind === "cloud" || !f.directory) && !state.result.repositories)) {
       const key = file.fid || file.url; if (checkbox.checked) state.selected.add(key); else state.selected.delete(key);
     }
     renderFiles(state);
   });
-  selection.append(queue); root.append(selection);
+  state.mutationButtons = [];
+  if (state.kind === "cloud") {
+    const actions = el("div","toolbar");
+    for (const [action,label,glyph] of [["create","新建文件夹","folder-plus"],["rename","重命名","pencil"],["move","移动","folder-input"],["delete","删除云端文件","trash-2"]]) {
+      const button = command(label,glyph,() => openCloudAction(state,action));
+      button.dataset.action = action; state.mutationButtons.push(button); actions.append(button);
+    }
+    actions.append(queue); selection.append(actions);
+  } else selection.append(queue);
+  root.append(selection);
   state.checkAll = checkbox; state.queueButton = queue;
   state.rows = el("div"); root.append(state.rows);
   if (state.result.hasMore) root.append(command("加载更多","chevron-down",async () => {
@@ -387,12 +397,18 @@ function visibleFiles(state) {
   return state.files.filter(file => file.name.toLocaleLowerCase().includes(state.query.toLocaleLowerCase())).sort((a,b) =>
     Number(b.directory)-Number(a.directory) || (state.sort === "size" ? (b.size || 0)-(a.size || 0) : state.sort === "time" ? String(b.modified || "").localeCompare(String(a.modified || "")) : a.name.localeCompare(b.name,"zh-CN")));
 }
+function updateSelection(state) {
+  const downloads = state.files.filter(f => !f.directory && state.selected.has(f.fid || f.url));
+  state.queueButton.disabled = !downloads.length;
+  state.queueButton.querySelector("span").textContent = downloads.length ? "下载所选 · "+downloads.length : "下载所选文件";
+  for (const button of state.mutationButtons || []) button.disabled = button.dataset.action === "create" ? false :
+    button.dataset.action === "rename" ? state.selected.size !== 1 : !state.selected.size;
+}
 function renderFiles(state) {
   const files = visibleFiles(state);
   state.rows.replaceChildren(); state.rows.className = state.layout === "grid" ? "file-grid" : "file-list";
-  state.queueButton.disabled = !state.selected.size;
-  state.queueButton.querySelector("span").textContent = state.selected.size ? "下载所选 · "+state.selected.size : "下载所选文件";
-  const selectable = files.filter(f => !f.directory && !state.result.repositories);
+  updateSelection(state);
+  const selectable = files.filter(f => (state.kind === "cloud" || !f.directory) && !state.result.repositories);
   state.checkAll.checked = !!selectable.length && selectable.every(f => state.selected.has(f.fid || f.url));
   state.checkAll.indeterminate = selectable.some(f => state.selected.has(f.fid || f.url)) && !state.checkAll.checked;
   state.checkAll.disabled = !selectable.length;
@@ -404,11 +420,11 @@ function renderFiles(state) {
   }
   for (const file of files) {
     const row = el("div","file-row"), check = el("input"); check.type = "checkbox";
-    check.disabled = !!file.directory || !!state.result.repositories; check.checked = state.selected.has(file.fid || file.url);
+    check.disabled = (!!file.directory && state.kind !== "cloud") || !!state.result.repositories; check.checked = state.selected.has(file.fid || file.url);
     check.setAttribute("aria-label","选择 "+file.name);
     check.addEventListener("change",() => {
       const key = file.fid || file.url; if (check.checked) state.selected.add(key); else state.selected.delete(key);
-      state.queueButton.disabled = !state.selected.size; state.queueButton.querySelector("span").textContent = "下载所选 · "+state.selected.size;
+      updateSelection(state);
       state.checkAll.checked = selectable.every(f => state.selected.has(f.fid || f.url)); state.checkAll.indeterminate = state.selected.size > 0 && !state.checkAll.checked;
     });
     const open = async () => {
@@ -424,6 +440,44 @@ function renderFiles(state) {
   }
   icons();
 }
+let cloudActionContext = null;
+function openCloudAction(state,action) {
+  const selected = state.files.filter(f=>state.selected.has(f.fid));
+  if (action !== "create" && (!selected.length || (action === "rename" && selected.length !== 1))) throw new Error("请选择文件");
+  cloudActionContext = {state,action,ids:selected.map(f=>f.fid)};
+  $("cloud-action-title").textContent = {create:"新建文件夹",rename:"重命名",move:"移动 "+selected.length+" 项",delete:"删除 "+selected.length+" 项云端文件？"}[action];
+  $("cloud-name-field").hidden = !["create","rename"].includes(action);
+  $("cloud-action-name").required = ["create","rename"].includes(action);
+  $("cloud-action-name").value = action === "rename" ? selected[0].name : "";
+  $("cloud-target-field").hidden = action !== "move";
+  $("cloud-action-target").replaceChildren(...(state.result.directories || []).filter(dir=>dir.id !== state.result.directory).map(dir=>{
+    const option=el("option","",dir.name); option.value=dir.id; return option;
+  }));
+  $("cloud-action-submit").disabled = action === "move" && !$("cloud-action-target").options.length;
+  $("cloud-action-submit").textContent = action === "delete" ? "删除云端文件" : "确认";
+  $("cloud-delete-detail").hidden = action !== "delete";
+  $("cloud-delete-detail").textContent = selected.slice(0,3).map(f=>f.name).join("\n")+"\n由网盘处理删除或回收；本地下载文件保留。";
+  $("cloud-action-status").textContent = "";
+  $("cloud-action-dialog").showModal(); icons();
+}
+for (const id of ["cloud-action-close","cloud-action-cancel"]) $(id).addEventListener("click",()=>$("cloud-action-dialog").close());
+$("cloud-action-dialog").addEventListener("close",()=>{cloudActionContext=null;});
+$("cloud-action-form").addEventListener("submit",event=>{
+  event.preventDefault();
+  busy(event.submitter,async()=>{
+    const context=cloudActionContext;
+    if (!context || browsers.cloud !== context.state) throw new Error("目录已切换，请重新选择");
+    const {state,action,ids}=context;
+    const response=await api("cloud/files",{action,sessionId:state.result.sessionId,directory:state.result.directory,fids:ids,
+      name:$("cloud-action-name").value,target:$("cloud-action-target").value,confirmed:action==="delete"});
+    $("cloud-action-dialog").close();
+    let message=response.message+(response.errors?.length ? "："+response.errors.map(e=>e.name+"："+e.message).join("；") : "");
+    let failed=response.errors?.length>0;
+    try { if (browsers.cloud === state) await navigate(state,state.stack.length-1); }
+    catch (error) { failed=true; message+="；目录刷新失败，请手动刷新："+error.message; }
+    notice(message,failed);
+  },"cloud-action-status");
+});
 async function refreshTasks() {
   const tasks = await api("tasks"); taskStates = tasks;
   $("task-count").textContent = tasks.filter(t => t.status <= 1).length;

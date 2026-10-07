@@ -20,7 +20,7 @@ object Log {
 
     @Synchronized
     private fun write(level: String, tag: String, msg: String) {
-        val line = "${LocalDateTime.now()} $level/$tag: $msg"
+        val line = "${LocalDateTime.now()} $level/$tag: ${LogRedactor.line(msg)}"
         println(line)
         runCatching {
             logFile.parentFile?.mkdirs()

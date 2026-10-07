@@ -310,7 +310,9 @@ fun MainScreen(
             keepAwakeProvider = { settings.keepAwakeWhileDownloading },
             showSpeedProvider = { settings.notificationShowSpeed },
             // 下载引擎开关：选了 Gopeed 时新任务交给外部引擎（还需内核已导入、平台非 GitHub）
-            engineEnabledProvider = { settings.downloadEngine == SettingsRepository.ENGINE_GOPEED }
+            engineEnabledProvider = { settings.downloadEngine == SettingsRepository.ENGINE_GOPEED },
+            systemEvents = com.yunx.app.util.WindowsDownloadEvents,
+            externalEngine = com.yunx.app.data.gopeed.GopeedDownloadEngine
         )
     }
 

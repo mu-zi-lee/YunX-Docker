@@ -17,7 +17,6 @@ import java.io.File
 import java.net.Proxy
 import java.net.ServerSocket
 import java.util.concurrent.TimeUnit
-import java.util.zip.ZipInputStream
 
 /**
  * 内置 Gopeed 下载引擎（**外部 exe 子进程** 版）。
@@ -63,7 +62,8 @@ object GopeedEngine {
 
     private const val TAG = "GopeedEngine"
     private const val DIR_NAME = "gopeed"
-    private const val EXE_NAME = "gopeed.exe"
+    private val platform get() = GopeedPlatform.current()
+    private val EXE_NAME get() = platform.executableName
     private const val BIN_DIR_NAME = "bin"
 
     /** 引擎 HTTP 协议的默认 UA（与 gopeed 自带默认一致）：任务未自带 UA 时使用，避免空 UA 被 CDN 限速 */
@@ -154,30 +154,7 @@ object GopeedEngine {
         require(archive.isFile) { "内核文件不存在：${archive.absolutePath}" }
         // 运行中的老内核必须先停：Windows 上正在执行的 exe 无法被覆盖
         if (_state.value == State.RUNNING) stop()
-        val target = exeFile()
-        target.parentFile?.mkdirs()
-
-        val name = archive.name.lowercase()
-        if (name.endsWith(".zip")) {
-            var found = false
-            ZipInputStream(archive.inputStream().buffered()).use { zip ->
-                var entry = zip.nextEntry
-                while (entry != null) {
-                    val entryName = entry.name.replace('\\', '/')
-                    if (!entry.isDirectory && entryName.substringAfterLast('/').equals(EXE_NAME, ignoreCase = true)) {
-                        target.outputStream().buffered().use { out -> zip.copyTo(out) }
-                        found = true
-                        break
-                    }
-                    entry = zip.nextEntry
-                }
-            }
-            if (!found) {
-                throw IllegalStateException("压缩包里没有找到 $EXE_NAME（请使用 Gopeed 官方 windows-amd64 包）")
-            }
-        } else {
-            archive.copyTo(target, overwrite = true)
-        }
+        val target = GopeedKernelInstaller.install(archive, exeFile(), platform)
         lastError = null
         _state.value = State.INSTALLED
         Log.i(TAG, "内核已导入：${target.absolutePath}（${kernelSize()} 字节）")
@@ -291,7 +268,7 @@ object GopeedEngine {
         val handle = ProcessHandle.of(pid).orElse(null) ?: return
         if (!handle.isAlive) return
         val cmd = runCatching { handle.info().command().orElse("") }.getOrDefault("")
-        if (!cmd.equals(exeFile().absolutePath, ignoreCase = true)) {
+        if (!cmd.equals(exeFile().absolutePath, ignoreCase = platform.system == "windows")) {
             Log.w(TAG, "pid $pid 存活但不是本应用的内核（$cmd），跳过清理")
             return
         }

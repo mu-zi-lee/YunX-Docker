@@ -201,7 +201,8 @@ fun main() {
         saveDirProvider = { downloadDir.absolutePath },
         concurrencyProvider = { store.get("_SETTINGS").optInt("concurrency", System.getenv("YUNX_CONCURRENCY")?.toIntOrNull() ?: 3).coerceIn(1, 10) },
         speedLimitProvider = { store.get("_SETTINGS").optLong("speedLimit", System.getenv("YUNX_SPEED_LIMIT")?.toLongOrNull() ?: 0L).coerceAtLeast(0) },
-        keepAwakeProvider = { false }, showSpeedProvider = { false }
+        keepAwakeProvider = { false }, showSpeedProvider = { false },
+        externalEngine = com.yunx.app.data.gopeed.GopeedDownloadEngine
     )
     val service = ServerService(db, downloads, store)
     val server = WebServer(

@@ -36,6 +36,8 @@ class ServerService(
     private val sessionLock = Mutex()
     private data class CloudSession(val platform: SharePlatform, val revision: Long,
         val files: MutableMap<String, ShareFile> = mutableMapOf(), val dirs: MutableSet<String> = mutableSetOf(),
+        val parents: MutableMap<String, String> = mutableMapOf(),
+        val listed: MutableMap<String, MutableSet<String>> = mutableMapOf(),
         val mutex: Mutex = Mutex(), val created: Long = System.currentTimeMillis())
     private val cloudSessions = ConcurrentHashMap<String, CloudSession>()
     private val profiles = ConcurrentHashMap<String, JSONObject>()
@@ -49,10 +51,22 @@ class ServerService(
         return UCApi().apply { cookieSink = { updated -> credentials.updateCookie("UC", expected, updated); expected = updated } }
     }
     private val github = GitHubApi(tokenProvider = { credentials.get("GITHUB").optString("accessToken") })
+    private val githubBrowser = GitHubBrowser(github)
+
+    fun exportAccounts(password: String): String = AccountBackup.export(credentials, password)
+    fun importAccounts(content: String, password: String): Int {
+        val values = AccountBackup.decode(content, password)
+        credentials.saveAll(values)
+        values.keys.forEach { revisions.merge(it, 1L, Long::plus); profiles.remove(it) }
+        sessions.clear()
+        cloudSessions.clear()
+        githubBrowser.clear()
+        return values.size
+    }
 
     fun accounts(): JSONArray = JSONArray(SharePlatform.entries.map { p ->
         JSONObject().put("platform", p.name).put("configured", credentials.credential(p.name).isNotBlank())
-            .put("cloudSupported", p !in setOf(SharePlatform.GITHUB, SharePlatform.LANZOU, SharePlatform.ILANZOU))
+            .put("cloudSupported", p != SharePlatform.GITHUB)
             .put("authType", if (p == SharePlatform.XUNLEI) credentials.get(p.name).optString("authType") else "")
             .put("profile", profiles[p.name] ?: JSONObject.NULL)
     })
@@ -60,7 +74,7 @@ class ServerService(
     fun saveAccount(body: JSONObject) {
         val platform = SharePlatform.valueOf(body.getString("platform"))
         val input = body.getJSONObject("credentials")
-        val allowed = setOf("cookie", "accessToken", "refreshToken", "deviceId", "deviceSign", "captchaToken", "authType", "label")
+        val allowed = setOf("cookie", "accessToken", "refreshToken", "deviceId", "deviceSign", "captchaToken", "authType", "label", "uuid")
         require(input.keySet().all { it in allowed }) { "未知凭证字段" }
         require(input.keySet().all { input.get(it) is String && input.getString(it).length <= 65536 }) { "凭证格式错误" }
         val next = if (input.length() == 0) JSONObject() else credentials.get(platform.name).apply {
@@ -69,9 +83,12 @@ class ServerService(
                 if (value.isNotBlank() || key in setOf("authType", "label")) put(key, value)
             }
         }
+        require(input.length() == 0 || platform != SharePlatform.ILANZOU ||
+            (next.optString("accessToken").isNotBlank() && next.optString("uuid").isNotBlank())) { "蓝奏优享需要 App Token 和 UUID" }
         credentials.save(platform.name, next)
         revisions.merge(platform.name, 1L, Long::plus)
         sessions.clear()
+        githubBrowser.clear()
         cloudSessions.clear()
         profiles.remove(platform.name)
     }
@@ -134,6 +151,18 @@ class ServerService(
             SharePlatform.C139 -> C139Api().getQuota(c)
             SharePlatform.XUNLEI -> XunleiApi().getQuota(c, account.optString("deviceId"), account.optString("captchaToken"))
             SharePlatform.GUANGYA -> GuangYaApi().getQuota(c, GuangYaDevice(account.optString("deviceId"), account.optString("deviceSign")))
+            SharePlatform.LANZOU -> {
+                name = LanzouApi().fetchLoginParams(c)?.let { "蓝奏云账号" }; null
+            }
+            SharePlatform.ILANZOU -> ILanzouApi().getQuota(c, account.getString("uuid"))
+            SharePlatform.GITHUB -> {
+                when (val check = github.validateToken(c)) {
+                    is TokenCheck.Valid -> name = check.login
+                    TokenCheck.Invalid -> error("凭证无效")
+                    TokenCheck.Unknown -> error("暂时无法验证")
+                }
+                null
+            }
             else -> null
         }
         val result = JSONObject().put("nickname", name ?: account.optString("label"))
@@ -144,14 +173,15 @@ class ServerService(
         result
     }
     suspend fun cloudFiles(body: JSONObject): JSONObject {
+        if (body.optString("action").isNotBlank()) return cloudAction(body)
         cloudSessions.entries.removeIf { System.currentTimeMillis() - it.value.created > 3600000 }
         val existing = body.optString("sessionId")
         val p = if (existing.isNotBlank()) cloudSessions[existing]?.platform ?: error("目录会话已失效，请重新打开网盘")
             else SharePlatform.valueOf(body.getString("platform"))
         val c = credentials.credential(p.name)
         require(c.isNotBlank()) { "请先添加网盘账号" }
-        require(p !in setOf(SharePlatform.GITHUB, SharePlatform.LANZOU, SharePlatform.ILANZOU)) { "此平台暂不支持个人网盘浏览" }
-        val root = when (p) { SharePlatform.BAIDU -> "/"; SharePlatform.C139, SharePlatform.XUNLEI -> ""; else -> "0" }
+        require(p != SharePlatform.GITHUB) { "请使用 GitHub 仓库入口" }
+        val root = when (p) { SharePlatform.BAIDU -> "/"; SharePlatform.C139, SharePlatform.XUNLEI -> ""; SharePlatform.LANZOU -> "-1"; else -> "0" }
         val session = if (existing.isBlank()) CloudSession(p, revisions[p.name] ?: 0L).apply { dirs.add(root) }
             else cloudSessions[existing] ?: error("目录会话已失效")
         return session.mutex.withLock {
@@ -179,17 +209,77 @@ class ServerService(
                     require(a.optString("authType") != "webToken") { "个人网盘浏览需要迅雷 App 通道凭证" }
                     XunleiApi().getFiles(dir, c, a.optString("deviceId"), a.optString("captchaToken")) ?: error("无法获取迅雷目录")
                 }
+                SharePlatform.LANZOU -> LanzouApi().let { api ->
+                    val params = api.fetchLoginParams(c) ?: error("凭证无效")
+                    api.listCloudFiles(c, params.uid, params.vei, dir)
+                }
+                SharePlatform.ILANZOU -> ILanzouApi().listFiles(c, a.getString("uuid"), dir)
                 else -> error("暂不支持")
             }
             require(session.revision == (revisions[p.name] ?: 0L)) { "账号配置已更新，请重试" }
-            files.forEach { session.files[it.fid] = it; if (it.isdir) session.dirs.add(if (p == SharePlatform.BAIDU) it.fidToken else it.fid) }
+            if (page == 1) session.listed[dir] = mutableSetOf()
+            files.forEach {
+                session.files[it.fid] = it
+                session.parents[it.fid] = dir
+                session.listed.getOrPut(dir) { mutableSetOf() }.add(it.fid)
+                if (it.isdir) session.dirs.add(CloudMutationPolicy.directoryId(p, it))
+            }
             val id = existing.ifBlank { require(cloudSessions.size < 100) { "目录会话过多" }; UUID.randomUUID().toString() }
             cloudSessions[id] = session
             JSONObject().put("sessionId", id).put("platform", p.name).put("directory", dir).put("title", "我的网盘")
-                .put("files", JSONArray(files.map { fileJson(it).put("directoryId", if (p == SharePlatform.BAIDU) it.fidToken else it.fid) }))
+                .put("files", JSONArray(files.map { fileJson(it).put("directoryId", CloudMutationPolicy.directoryId(p, it)) }))
+                .put("directories", cloudDirectories(session))
                 .put("hasMore", more).put("cursor", cursor)
                 .put("limited", p == SharePlatform.XUNLEI && files.size >= 500)
         }
+    }
+    suspend fun cloudAction(body: JSONObject): JSONObject {
+        val id = body.getString("sessionId")
+        val session = cloudSessions[id] ?: error("目录会话已失效，请重新打开网盘")
+        return session.mutex.withLock {
+            require(session.revision == (revisions[session.platform.name] ?: 0L)) { "账号配置已更新，请重新打开网盘" }
+            val listed = session.listed[body.getString("directory")].orEmpty()
+            val operation = CloudMutationPolicy.validate(body, session.platform, session.files, session.parents, session.dirs, listed)
+            val result = CloudMutationExecutor(::quark, ::uc).execute(session.platform, credentials.get(session.platform.name), operation) {
+                require(session.revision == (revisions[session.platform.name] ?: 0L)) { "账号配置已更新，操作停止" }
+            }
+            require(session.revision == (revisions[session.platform.name] ?: 0L)) { "账号已更新；操作结果请刷新确认" }
+            cloudSessions.entries.removeIf { it.key != id && it.value.platform == session.platform }
+            if (operation.action in setOf("move", "delete")) {
+                val processed = result.getJSONArray("processedFids").let { array -> (0 until array.length()).map { array.getString(it) }.toSet() }
+                val removedDirs = operation.files.filter { it.fid in processed && it.isdir }
+                    .map { CloudMutationPolicy.directoryId(session.platform, it) }.toMutableSet()
+                do {
+                    val previousSize = removedDirs.size
+                    session.files.values.filter { it.isdir && session.parents[it.fid] in removedDirs }
+                        .forEach { removedDirs.add(CloudMutationPolicy.directoryId(session.platform, it)) }
+                } while (removedDirs.size != previousSize)
+                session.dirs.removeAll(removedDirs)
+                removedDirs.forEach { session.listed.remove(it) }
+                session.files.values.filter { session.parents[it.fid] in removedDirs }.map { it.fid }.forEach {
+                    session.files.remove(it); session.parents.remove(it)
+                }
+                operation.files.filter { it.fid in processed }.forEach {
+                    session.files.remove(it.fid); session.parents.remove(it.fid)
+                    if (it.isdir) session.dirs.remove(CloudMutationPolicy.directoryId(session.platform, it))
+                }
+            }
+            result
+        }
+    }
+    private fun cloudDirectories(session: CloudSession): JSONArray {
+        val folders = session.files.values.filter { it.isdir }.associateBy { CloudMutationPolicy.directoryId(session.platform, it) }
+        return JSONArray(session.dirs.map { id ->
+            val components = mutableListOf<String>()
+            var current: String? = id
+            val visited = mutableSetOf<String>()
+            while (current != null && visited.add(current)) {
+                val folder = folders[current] ?: break
+                components.add(0, folder.fname)
+                current = session.parents[folder.fid]
+            }
+            JSONObject().put("id", id).put("name", if (components.isEmpty()) "根目录" else "/${components.joinToString("/")}")
+        }.sortedBy { it.getString("name") })
     }
     suspend fun cloudDownload(body: JSONObject): JSONObject {
         val s = cloudSessions[body.getString("sessionId")] ?: error("目录会话已失效")
@@ -208,6 +298,15 @@ class ServerService(
                 SharePlatform.C139 -> C139Api().getDownloadUrl(f.fid, c)
                 SharePlatform.GUANGYA -> GuangYaApi().apply { deviceIdProvider = { a.optString("deviceId") } }.getDownloadLink(c, f)
                 SharePlatform.XUNLEI -> XunleiApi().getFileDetail(f.fid, c, a.optString("deviceId"), a.optString("captchaToken"))
+                SharePlatform.LANZOU -> LanzouApi().let { api ->
+                    val params = api.fetchLoginParams(c) ?: error("凭证无效")
+                    api.getPersonalDownloadLink(c, params.uid, params.vei, f.fid.removePrefix(LanzouConstants.FILE_PREFIX), f.fname)
+                }
+                SharePlatform.ILANZOU -> ILanzouApi().let { api ->
+                    val uuid = a.getString("uuid")
+                    val info = api.fetchAccountInfo(c, uuid) ?: error("暂时无法验证")
+                    api.getDownloadLink(c, uuid, f.fid.removePrefix(ILanzouConstants.FILE_PREFIX), info.userId)
+                }
                 else -> null
             } ?: error("未取得下载地址，请检查账号权限")
             require(s.revision == (revisions[s.platform.name] ?: 0L)) { "账号配置已更新，请重新打开网盘" }
@@ -283,11 +382,18 @@ class ServerService(
     }
 
     suspend fun list(body: JSONObject): JSONObject {
+        if (githubBrowser.contains(body.getString("sessionId")))
+            return githubBrowser.list(body.getString("sessionId"), body.getString("directory"))
         val s = sessions[body.getString("sessionId")] ?: error("分享会话已失效，请重新解析")
         return s.mutex.withLock { list(s, body.getString("directory")) }
     }
 
     suspend fun enqueue(body: JSONObject): JSONObject {
+        if (githubBrowser.contains(body.getString("sessionId"))) {
+            val file = githubBrowser.download(body.getString("sessionId"), body.getString("fid"))
+            return JSONObject().put("id", downloads.enqueue(file.getString("url"), file.getString("name"),
+                emptyMap(), file.optLong("size"), "github"))
+        }
         val s = sessions[body.getString("sessionId")] ?: error("分享会话已失效，请重新解析")
         return s.mutex.withLock {
             val file = s.files[body.getString("fid")] ?: error("文件未列出，请重新解析")
@@ -351,21 +457,13 @@ class ServerService(
     private suspend fun githubResolve(text: String): JSONObject {
         return when (val target = GitHubLinkParser.parse(text)) {
             is GitHubLinkType.DirectFile -> JSONObject().put("directUrl", target.url).put("filename", target.fileName)
-            is GitHubLinkType.Repository -> {
-                val repo = github.getRepo(target.owner, target.repo) ?: error("无法读取 GitHub 仓库")
-                val releases = github.getReleases(target.owner, target.repo) ?: error("无法读取 GitHub Releases")
-                val files = releases.flatMap { it.assets }.map {
-                    JSONObject().put("name", it.name).put("size", it.size).put("url", it.downloadUrl)
-                }.toMutableList()
-                val branch = java.net.URLEncoder.encode(repo.defaultBranch, "UTF-8").replace("+", "%20")
-                files.add(JSONObject().put("name", "${repo.name}-${repo.defaultBranch}.zip").put("size", 0)
-                    .put("url", "https://github.com/${repo.fullName}/archive/refs/heads/$branch.zip"))
-                JSONObject().put("title", repo.fullName).put("platform", "GITHUB").put("assets", JSONArray(files))
-            }
+            is GitHubLinkType.Repository -> githubBrowser.resolve(target)
             is GitHubLinkType.Account -> {
                 val repos = mutableListOf<GitHubRepo>()
+                val organization = github.getUserType(target.owner) == "Organization"
                 for (page in 1..100) {
-                    val batch = github.getUserRepos(target.owner, page) ?: error("无法读取 GitHub 账号仓库")
+                    val batch = (if (organization) github.getOrgRepos(target.owner, page) else github.getUserRepos(target.owner, page))
+                        ?: error("无法读取 GitHub 账号仓库")
                     repos.addAll(batch)
                     if (batch.size < 100) break
                 }

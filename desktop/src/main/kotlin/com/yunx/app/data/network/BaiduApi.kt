@@ -453,7 +453,7 @@ suspend fun listShare(surl: String, sekey: String, dir: String, cookie: String, 
     /** 重命名（filemanager opera=rename，按完整路径） */
     suspend fun renameFile(path: String, newName: String, cookie: String): Boolean = withContext(Dispatchers.IO) {
         val bdstoken = getBdstoken(cookie) ?: return@withContext false
-        val filelist = """[{"path":"$path","newname":"$newName"}]"""
+        val filelist = JSONArray().put(JSONObject().put("path", path).put("newname", newName)).toString()
         val body = "filelist=${URLEncoder.encode(filelist, "UTF-8")}"
         val request = Request.Builder()
             .url("https://pan.baidu.com/api/filemanager?async=0&onnest=fail&opera=rename" +
@@ -477,11 +477,8 @@ suspend fun listShare(surl: String, sekey: String, dir: String, cookie: String, 
         cookie: String
     ): Boolean = withContext(Dispatchers.IO) {
         val bdstoken = getBdstoken(cookie) ?: return@withContext false
-        val items = paths.joinToString(",") { p ->
-            val name = p.substringAfterLast('/')
-            """{"path":"$p","dest":"$dest","newname":"$name"}"""
-        }
-        val body = "filelist=${URLEncoder.encode("[$items]", "UTF-8")}"
+        val items = JSONArray(paths.map { p -> JSONObject().put("path", p).put("dest", dest).put("newname", p.substringAfterLast('/')) })
+        val body = "filelist=${URLEncoder.encode(items.toString(), "UTF-8")}"
         val request = Request.Builder()
             .url("https://pan.baidu.com/api/filemanager?async=2&onnest=fail&opera=move" +
                 "&bdstoken=$bdstoken&clienttype=0&app_id=${BaiduConstants.APP_ID}&web=1")
@@ -500,7 +497,7 @@ suspend fun listShare(surl: String, sekey: String, dir: String, cookie: String, 
     /** 批量删除（filemanager opera=delete，按完整路径） */
     suspend fun deleteFiles(paths: List<String>, cookie: String): Boolean = withContext(Dispatchers.IO) {
         val bdstoken = getBdstoken(cookie) ?: return@withContext false
-        val body = "filelist=${URLEncoder.encode(paths.joinToString(",", "[", "]") { "\"$it\"" }, "UTF-8")}"
+        val body = "filelist=${URLEncoder.encode(JSONArray(paths).toString(), "UTF-8")}"
         val request = Request.Builder()
             .url("https://pan.baidu.com/api/filemanager?async=2&onnest=fail&opera=delete" +
                 "&bdstoken=$bdstoken&newVerify=1&clienttype=0&app_id=${BaiduConstants.APP_ID}&web=1")

@@ -18,6 +18,10 @@
 > 开发；更早的 Android 项目为 [CYQawa/YunX](https://github.com/CYQawa/YunX)。
 > 本 Fork 保留桌面版源码与文档，并在独立的 `server/` 模块实现网页服务。
 
+本仓库另提供 **Apple Silicon macOS 本地精简版**：使用与 Web 版一致的视觉风格，
+手动配置网盘凭证、浏览与解析文件、下载到 Mac 本机，无需 Docker。
+安装、功能边界及构建方式见 [macOS 说明](docs/MACOS.md)。
+
 ## 界面预览
 
 下方账号、容量与文件内容是浏览器测试使用的**演示数据**，不是实际网盘账号的容量或真实下载结果。
